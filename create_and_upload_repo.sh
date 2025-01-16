@@ -4,20 +4,11 @@
 TOKEN="glpat-eX-vwr3j7nPZmtYohnXF"
 PROJECT_ID="66226575"
 RPM_DIR="./rpms"
-REPO_DIR="./repo_temp"
-
-# Create temporary directory structure
-rm -rf "$REPO_DIR"
-mkdir -p "$REPO_DIR"
-
-# Copy RPMs to temporary directory
-echo "Copying RPMs to temporary directory..."
-cp "$RPM_DIR"/*.rpm "$REPO_DIR/"
 
 # Create repository metadata using Docker
 echo "Creating repository metadata..."
 docker run --rm \
-    -v "$(pwd)/$REPO_DIR:/repo" \
+    -v "$(pwd)/$RPM_DIR:/repo" \
     rockylinux:9 \
     bash -c "dnf install -y createrepo_c && createrepo_c /repo"
 
@@ -29,8 +20,8 @@ existing_files=$(curl --silent --header "PRIVATE-TOKEN: $TOKEN" \
 
 # Sync repository files
 echo "Syncing repository files..."
-find "$REPO_DIR" -type f | while read -r file; do
-    relative_path=${file#"$REPO_DIR/"}
+find "$RPM_DIR" -type f | while read -r file; do
+    relative_path=${file#"$RPM_DIR/"}
     local_size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file")
     
     # Extract remote size for this file if it exists
@@ -45,9 +36,5 @@ find "$REPO_DIR" -type f | while read -r file; do
         echo "Skipping unchanged file: $relative_path"
     fi
 done
-
-# Clean up
-echo "Cleaning up temporary files..."
-rm -rf "$REPO_DIR"
 
 echo "Repository sync complete!" 
