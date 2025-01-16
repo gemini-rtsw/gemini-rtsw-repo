@@ -7,10 +7,18 @@ RPM_DIR="./rpms"
 
 # Create repository metadata using Docker
 echo "Creating repository metadata..."
+echo "1. Pulling Rocky Linux 9 image (if needed)..."
+docker pull rockylinux:9
+
+echo "2. Installing createrepo_c and generating metadata..."
 docker run --rm \
     -v "$(pwd)/$RPM_DIR:/repo" \
     rockylinux:9 \
-    bash -c "dnf install -y createrepo_c && createrepo_c /repo"
+    bash -c "set -x && \
+             echo 'Installing createrepo_c...' && \
+             dnf install -y createrepo_c && \
+             echo 'Creating repository metadata...' && \
+             createrepo_c --verbose /repo"
 
 # Get list of existing files and their sizes
 echo "Getting existing files from repository..."
