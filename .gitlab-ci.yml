@@ -5,8 +5,8 @@ variables:
 update-repo-metadata:
   image: rockylinux:9
   script:
-    # Install required packages
-    - dnf install -y createrepo_c curl jq
+    # Install required packages with --allowerasing to handle curl conflict
+    - dnf install -y --allowerasing createrepo_c curl jq
 
     # Create repo directory
     - mkdir -p $REPO_PATH
