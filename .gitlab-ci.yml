@@ -1,0 +1,20 @@
+variables:
+  REPO_PATH: "/path/to/repo"
+
+update-repo-metadata:
+  image: centos:7  # or any other base image that supports createrepo_c
+  script:
+    - yum install -y createrepo_c wget
+    # Create directory if it doesn't exist
+    - mkdir -p $REPO_PATH
+    # Download only the package metadata from GitLab API
+    - |
+      curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+      "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages" \
+      | jq -r '.[] | select(.package_type=="rpm") | .version' \
+      > package_list.txt
+    # Create/update repo metadata
+    - createrepo_c --update $REPO_PATH
+  rules:
+    - changes:
+      - packages/**/*  # Adjust this path based on where your RPMs are stored 
