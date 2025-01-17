@@ -1,6 +1,7 @@
 variables:
   REPO_PATH: "repo"
   PROJECT_ID: "66226575"
+  PACKAGE_ID: "34287433"
 
 update-repo-metadata:
   image: rockylinux:9
@@ -15,13 +16,21 @@ update-repo-metadata:
     - |
       echo "Getting package list..."
       curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-        "https://gitlab.com/api/v4/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/" \
+        "https://gitlab.com/api/v4/projects/${PROJECT_ID}/packages/${PACKAGE_ID}/package_files" \
         | tee /tmp/response.json
       
       echo "API Response:"
       cat /tmp/response.json | jq '.'
 
-    # Create repodata once we fix the jq query
+      # Extract RPM filenames and download them
+      cat /tmp/response.json | jq -r '.[] | .file_name' | while read rpm; do
+        echo "Downloading $rpm..."
+        curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          -L -o "${REPO_PATH}/${rpm}" \
+          "https://gitlab.com/api/v4/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/${rpm}"
+      done
+
+    # Create repo metadata
     - createrepo_c --database $REPO_PATH
 
   artifacts:
