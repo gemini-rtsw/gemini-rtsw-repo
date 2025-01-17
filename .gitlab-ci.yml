@@ -13,22 +13,29 @@ update-repo-metadata:
 
     # Debug: show API response and structure
     - |
+      echo "Project ID: ${CI_PROJECT_ID}"
       echo "API URL: ${GITLAB_API_URL}?package_type=rpm"
-      curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+      curl -v --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
           "${GITLAB_API_URL}?package_type=rpm" | tee /tmp/response.json
       echo "API Response Structure:"
       cat /tmp/response.json | jq '.'
 
     # Generate .rpm links without downloading
     - |
-      curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-          "${GITLAB_API_URL}?package_type=rpm" | \
-      jq -r '.[] | select(.package_files) | .package_files[] | select(.file_type=="rpm") | 
-      "[$CI_PROJECT_URL/-/package_registry/\(.file_name)]
-      name=\(.file_name)
-      baseurl=$CI_PROJECT_URL/-/package_registry/rpm
-      enabled=1
-      gpgcheck=0"' > ${REPO_PATH}/gitlab.repo
+      if [ "$(cat /tmp/response.json | jq '. | length')" -gt 0 ]; then
+        curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+            "${GITLAB_API_URL}?package_type=rpm" | \
+        jq -r '.[] | select(.package_files) | .package_files[] | select(.file_type=="rpm") | 
+        "[$CI_PROJECT_URL/-/package_registry/\(.file_name)]
+        name=\(.file_name)
+        baseurl=$CI_PROJECT_URL/-/package_registry/rpm
+        enabled=1
+        gpgcheck=0"' > ${REPO_PATH}/gitlab.repo
+        echo "Created repo file:"
+        cat ${REPO_PATH}/gitlab.repo
+      else
+        echo "No RPM packages found in the registry"
+      fi
 
     # Create repo metadata using only the package information
     - createrepo_c --database --update $REPO_PATH
