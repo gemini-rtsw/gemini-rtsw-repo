@@ -1,29 +1,32 @@
 variables:
   REPO_PATH: "repo"
-  GITLAB_API_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/34287433/package_files"
+  PROJECT_ID: "66226575"
 
 update-repo-metadata:
   image: rockylinux:9
   script:
-    # Install required packages with --allowerasing to handle curl conflict
-    - dnf install -y --allowerasing createrepo_c curl jq file
+    # Install required packages
+    - dnf install -y --allowerasing createrepo_c curl jq
 
     # Create repo directory
-    - mkdir -p $REPO_PATH
+    - mkdir -p $REPO_PATH/repodata
 
-    # Download one small RPM for testing with verbose output
+    # Get list of RPMs from the generic package registry
     - |
-      echo "Downloading RPM..."
-      curl -v --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-          "${CI_PROJECT_URL}/-/package_registry/rpm/ecsmotorrecord-devel-2.8.22-0.git.19.a2242a8.x86_64.rpm" \
-          -o "${REPO_PATH}/ecsmotorrecord-devel-2.8.22-0.git.19.a2242a8.x86_64.rpm"
-      
-      echo "Checking downloaded file:"
-      ls -l ${REPO_PATH}/
-      file ${REPO_PATH}/*.rpm
+      curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+        "https://gitlab.com/api/v4/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/" \
+        | jq -r '.[] | .file_name' > ${REPO_PATH}/package_list.txt
+
+    # Create repodata
+    - |
+      for rpm in $(cat ${REPO_PATH}/package_list.txt); do
+        curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          -L -o "${REPO_PATH}/${rpm}" \
+          "https://gitlab.com/api/v4/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/${rpm}"
+      done
 
     # Create repo metadata
-    - createrepo_c --database --update $REPO_PATH
+    - createrepo_c --database $REPO_PATH
 
   artifacts:
     paths:
