@@ -5,57 +5,41 @@ variables:
 update-repo-metadata:
   image: rockylinux:9
   script:
-    # Install required tools with --allowerasing to handle package conflicts
-    - dnf install -y --allowerasing curl jq
+    # Install required tools
+    - dnf install -y --allowerasing curl jq createrepo_c
 
-    # For each RPM package in the repository, create package registry metadata
+    # Create repo directory structure
+    - mkdir -p $REPO_PATH
+
+    # Download all RPMs from the package registry
     - |
-      for rpm in packages/*.rpm; do
-        if [ -f "$rpm" ]; then
-          # Extract RPM metadata
-          NAME=$(rpm -qp --queryformat '%{NAME}' "$rpm")
-          VERSION=$(rpm -qp --queryformat '%{VERSION}' "$rpm")
-          RELEASE=$(rpm -qp --queryformat '%{RELEASE}' "$rpm")
-          ARCH=$(rpm -qp --queryformat '%{ARCH}' "$rpm")
-          
-          # Create JSON payload for GitLab API
-          JSON_PAYLOAD=$(jq -n \
-            --arg name "$NAME" \
-            --arg version "$VERSION" \
-            --arg release "$RELEASE" \
-            --arg arch "$ARCH" \
-            '{
-              "name": $name,
-              "version": $version,
-              "release": $release,
-              "arch": $arch,
-              "distribution": "el9"
-            }')
-          
-          # Send metadata to GitLab Package Registry
-          curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
-               --header "Content-Type: application/json" \
-               --data "$JSON_PAYLOAD" \
-               --output "/tmp/response.json" \
-               "${API_URL}"
-          
-          # Check response
-          if [ $? -ne 0 ]; then
-            echo "Failed to update metadata for $rpm"
-            cat /tmp/response.json
-            exit 1
-          fi
-        fi
+      for package in $(curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+                           "${API_URL}/rpms" | jq -r '.[] | .file_name'); do
+        curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+             --output "$REPO_PATH/$package" \
+             "${API_URL}/rpms/files/$package"
+      done
+
+    # Generate repository metadata
+    - createrepo_c $REPO_PATH
+
+    # Upload the repodata back to GitLab
+    - |
+      cd $REPO_PATH/repodata
+      for file in *; do
+        curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+             --upload-file "$file" \
+             "${API_URL}/repodata/$file"
       done
 
   artifacts:
     paths:
-      - /tmp/response.json
+      - ${REPO_PATH}
     expire_in: 1 week
 
   rules:
-    - if: $CI_PIPELINE_SOURCE == "package"         # Run on package registry changes
+    - if: $CI_PIPELINE_SOURCE == "package"
       when: always
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: always
-    - when: manual                                 # Still allow manual runs as fallback 
+    - when: manual 
