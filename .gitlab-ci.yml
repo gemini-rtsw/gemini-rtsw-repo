@@ -3,10 +3,10 @@ variables:
   GITLAB_API_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages"
 
 update-repo-metadata:
-  image: centos:7
+  image: rockylinux:9
   script:
-    # Install required packages
-    - yum install -y createrepo_c curl jq
+    # Install required packages (using dnf instead of yum)
+    - dnf install -y createrepo_c curl jq
 
     # Create repo directory
     - mkdir -p $REPO_PATH
