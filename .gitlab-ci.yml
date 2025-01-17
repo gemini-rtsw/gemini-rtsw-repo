@@ -29,18 +29,54 @@ update-repo-metadata:
              --output "files_${package_id}.json" \
              "${API_URL}/packages/${package_id}/package_files"
         
+        echo "Files response for package $package_id:"
+        cat "files_${package_id}.json"
+        
+        # Check if the response is valid JSON and has content
+        if ! jq empty "files_${package_id}.json" 2>/dev/null; then
+          echo "Invalid JSON response for package $package_id"
+          continue
+        fi
+        
+        if [ ! -s "files_${package_id}.json" ]; then
+          echo "Empty response for package $package_id"
+          continue
+        fi
+        
         # Download RPM files
         while IFS= read -r line; do
-          file=$(echo "$line" | jq -r '.file_name')
-          link=$(echo "$line" | jq -r '._links.download')
+          if [ -z "$line" ]; then
+            continue
+          fi
+          
+          file=$(echo "$line" | jq -r '.file_name // empty')
+          link=$(echo "$line" | jq -r '._links.download // empty')
+          
+          if [ -z "$file" ] || [ -z "$link" ]; then
+            echo "Missing file_name or download link in response"
+            continue
+          fi
+          
           if [[ $file == *.rpm ]]; then
-            echo "Downloading $file..."
-            curl --silent --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+            echo "Downloading $file from $link..."
+            curl --silent --fail --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
                  --location \
                  --output "$REPO_PATH/$file" \
                  "$link"
+            
+            if [ $? -ne 0 ]; then
+              echo "Failed to download $file"
+              continue
+            fi
+            
+            # Verify the downloaded file
+            if [ ! -s "$REPO_PATH/$file" ]; then
+              echo "Downloaded file $file is empty"
+              rm -f "$REPO_PATH/$file"
+              continue
+            fi
           fi
-        done < <(jq -c '.[]' "files_${package_id}.json")
+        done < <(jq -c '.[]' "files_${package_id}.json" 2>/dev/null || echo '')
       done
 
       # List downloaded RPMs
