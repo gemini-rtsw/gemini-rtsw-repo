@@ -11,11 +11,19 @@ update-repo-metadata:
     # Create repo directory
     - mkdir -p $REPO_PATH
 
-    # Generate .rpm links without downloading
+    # Debug: show API response and structure
+    - |
+      echo "API URL: ${GITLAB_API_URL}?package_type=rpm"
+      curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+          "${GITLAB_API_URL}?package_type=rpm" | tee /tmp/response.json
+      echo "API Response Structure:"
+      cat /tmp/response.json | jq '.'
+
+    # Generate .rpm links without downloading (simplified query for testing)
     - |
       curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
           "${GITLAB_API_URL}?package_type=rpm" | \
-      jq -r '.[] | .versions[] | .package_files[] | select(.file_type=="rpm") | 
+      jq -r '.[] | select(.package_files) | .package_files[] | select(.file_type=="rpm") | 
       "[$CI_PROJECT_URL/-/package_registry/\(.file_name)]
       name=\(.file_name)
       baseurl=$CI_PROJECT_URL/-/package_registry/rpm
@@ -28,6 +36,7 @@ update-repo-metadata:
   artifacts:
     paths:
       - ${REPO_PATH}
+      - /tmp/response.json
     expire_in: 1 week
 
   rules:
