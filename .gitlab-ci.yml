@@ -15,34 +15,36 @@ update-repo-metadata:
     - |
       # Get list of RPMs from generic package repository
       echo "Fetching RPM package list..."
-      curl --silent --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-           "${API_URL}/packages/generic/rpm-repo/1.0" | tee packages.json
+      PACKAGE_LIST=$(curl --silent --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+           "${API_URL}/packages/generic/rpm-repo/1.0" | \
+           grep -o '"name":"[^"]*\.rpm"' | sed 's/"name":"//;s/"//')
 
-      # Debug output
       echo "Package list content:"
-      cat packages.json
+      echo "$PACKAGE_LIST"
       
       # Download all RPM files
       echo "Looking for RPM files..."
-      for rpm in $(jq -r '.[] | select(.name | endswith(".rpm")) | .name' packages.json); do
-        echo "Downloading RPM: $rpm"
-        
-        # Download the RPM file
-        HTTP_CODE=$(curl --silent --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-             --write-out "%{http_code}" \
-             --output "$REPO_PATH/$rpm" \
-             "${API_URL}/packages/generic/rpm-repo/1.0/$rpm")
-        
-        if [ "$HTTP_CODE" != "200" ]; then
-          echo "Error downloading $rpm (HTTP $HTTP_CODE)"
-          cat "$REPO_PATH/$rpm" || true
-          continue
-        fi
-        
-        # Verify file size
-        if [ $(stat -c%s "$REPO_PATH/$rpm") -lt 1024 ]; then
-          echo "Warning: $rpm appears to be too small or empty"
-          continue
+      for rpm in $PACKAGE_LIST; do
+        if [[ "$rpm" == *.rpm ]]; then
+          echo "Downloading RPM: $rpm"
+          
+          # Download the RPM file
+          HTTP_CODE=$(curl --silent --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+               --write-out "%{http_code}" \
+               --output "$REPO_PATH/$rpm" \
+               "${API_URL}/packages/generic/rpm-repo/1.0/$rpm")
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Error downloading $rpm (HTTP $HTTP_CODE)"
+            cat "$REPO_PATH/$rpm" || true
+            continue
+          fi
+          
+          # Verify file size
+          if [ $(stat -c%s "$REPO_PATH/$rpm") -lt 1024 ]; then
+            echo "Warning: $rpm appears to be too small or empty"
+            continue
+          fi
         fi
       done
 
