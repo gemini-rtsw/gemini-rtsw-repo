@@ -16,30 +16,26 @@ for rpm in "$RPM_DIR"/*.rpm; do
     RELEASE=$(rpm -qp --queryformat '%{RELEASE}' "$rpm")
     ARCH=$(rpm -qp --queryformat '%{ARCH}' "$rpm")
     
-    # Create JSON payload
-    JSON_PAYLOAD=$(jq -n \
-      --arg name "$NAME" \
-      --arg version "$VERSION" \
-      --arg release "$RELEASE" \
-      --arg arch "$ARCH" \
-      '{
-        "name": $name,
-        "version": $version,
-        "release": $release,
-        "arch": $arch,
-        "distribution": "el9"
-      }')
-
     echo "Uploading $rpm..."
-    curl --header "PRIVATE-TOKEN: $TOKEN" \
-         --header "Content-Type: application/json" \
-         --data "$JSON_PAYLOAD" \
-         --upload-file "$rpm" \
+    curl --silent --show-error \
+         --header "PRIVATE-TOKEN: $TOKEN" \
+         --form "file=@$rpm" \
+         --form "name=$NAME" \
+         --form "version=$VERSION" \
+         --form "release=$RELEASE" \
+         --form "arch=$ARCH" \
+         --form "distribution=el8" \
          "https://gitlab.com/api/v4/projects/$PROJECT_ID/packages/rpm/rpms"
-    
-    echo "Uploaded: $rpm"
+
+    if [ $? -eq 0 ]; then
+      echo "Successfully uploaded: $rpm"
+    else
+      echo "Failed to upload: $rpm"
+      exit 1
+    fi
   else
     echo "No RPMs found in $RPM_DIR"
+    exit 1
   fi
 done
 
