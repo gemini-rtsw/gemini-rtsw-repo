@@ -5,8 +5,8 @@ variables:
 update-repo-metadata:
   image: rockylinux:9
   script:
-    # Install required tools
-    - dnf install -y curl jq
+    # Install required tools with --allowerasing to handle package conflicts
+    - dnf install -y --allowerasing curl jq
 
     # For each RPM package in the repository, create package registry metadata
     - |
