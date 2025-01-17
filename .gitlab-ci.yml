@@ -1,41 +1,55 @@
 variables:
   REPO_PATH: "repo"
-  PROJECT_ID: "66226575"
-  PACKAGE_ID: "34287433"
+  API_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/rpm"
 
 update-repo-metadata:
   image: rockylinux:9
   script:
-    # Install required packages
-    - dnf install -y --allowerasing createrepo_c curl jq
+    # Install required tools
+    - dnf install -y curl jq
 
-    # Create repo directory
-    - mkdir -p $REPO_PATH/repodata
-
-    # Get list of RPMs and debug the response
+    # For each RPM package in the repository, create package registry metadata
     - |
-      echo "Getting package list..."
-      curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-        "https://gitlab.com/api/v4/projects/${PROJECT_ID}/packages/${PACKAGE_ID}/package_files" \
-        | tee /tmp/response.json
-      
-      echo "API Response:"
-      cat /tmp/response.json | jq '.'
-
-      # Extract RPM filenames and download them
-      cat /tmp/response.json | jq -r '.[] | .file_name' | while read rpm; do
-        echo "Downloading $rpm..."
-        curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-          -L -o "${REPO_PATH}/${rpm}" \
-          "https://gitlab.com/api/v4/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/${rpm}"
+      for rpm in packages/*.rpm; do
+        if [ -f "$rpm" ]; then
+          # Extract RPM metadata
+          NAME=$(rpm -qp --queryformat '%{NAME}' "$rpm")
+          VERSION=$(rpm -qp --queryformat '%{VERSION}' "$rpm")
+          RELEASE=$(rpm -qp --queryformat '%{RELEASE}' "$rpm")
+          ARCH=$(rpm -qp --queryformat '%{ARCH}' "$rpm")
+          
+          # Create JSON payload for GitLab API
+          JSON_PAYLOAD=$(jq -n \
+            --arg name "$NAME" \
+            --arg version "$VERSION" \
+            --arg release "$RELEASE" \
+            --arg arch "$ARCH" \
+            '{
+              "name": $name,
+              "version": $version,
+              "release": $release,
+              "arch": $arch,
+              "distribution": "el9"
+            }')
+          
+          # Send metadata to GitLab Package Registry
+          curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+               --header "Content-Type: application/json" \
+               --data "$JSON_PAYLOAD" \
+               --output "/tmp/response.json" \
+               "${API_URL}"
+          
+          # Check response
+          if [ $? -ne 0 ]; then
+            echo "Failed to update metadata for $rpm"
+            cat /tmp/response.json
+            exit 1
+          fi
+        fi
       done
-
-    # Create repo metadata
-    - createrepo_c --database $REPO_PATH
 
   artifacts:
     paths:
-      - ${REPO_PATH}
       - /tmp/response.json
     expire_in: 1 week
 
