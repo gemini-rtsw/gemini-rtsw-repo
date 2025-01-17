@@ -6,10 +6,10 @@ update-repo-metadata:
   image: rockylinux:9
   script:
     # Install required packages with --allowerasing to handle curl conflict
-    - dnf install -y --allowerasing createrepo_c curl jq yum-utils
+    - dnf install -y --allowerasing createrepo_c curl jq
 
-    # Create repo directory
-    - mkdir -p $REPO_PATH
+    # Create repo directory and subdirectories
+    - mkdir -p $REPO_PATH/rpms
 
     # Debug: show API response and structure
     - |
@@ -20,43 +20,39 @@ update-repo-metadata:
       echo "API Response Structure:"
       cat /tmp/response.json | jq '.'
 
-    # Generate repo file and download RPM headers
+    # Generate primary.xml file directly
     - |
       if [ "$(cat /tmp/response.json | jq '. | length')" -gt 0 ]; then
-        # Create the repo file
+        # Create primary.xml header
+        cat > ${REPO_PATH}/primary.xml << EOF
+      <?xml version="1.0" encoding="UTF-8"?>
+      <metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="$(cat /tmp/response.json | jq '. | length')">
+      EOF
+
+        # Add package entries
         curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
             "${GITLAB_API_URL}" | \
         jq -r '.[] | select(.file_type=="rpm") | 
-        "[gitlab-rpm-repo]
-        name=GitLab RPM Repository
-        baseurl=$CI_PROJECT_URL/-/package_registry/rpm
-        enabled=1
-        gpgcheck=0"' > /etc/yum.repos.d/gitlab.repo
+        "<package type=\"rpm\">
+          <name>\(.file_name | split("-")[0])</name>
+          <arch>\(.file_name | split(".")[-2])</arch>
+          <version epoch=\"0\" ver=\"\(.file_name | split("-")[1])\" rel=\"\(.file_name | split("-")[2])\"/>
+          <checksum type=\"sha256\" pkgid=\"YES\">\(.file_sha256)</checksum>
+          <size package=\"\(.size)\"/>
+          <location href=\"\(.file_name)\"/>
+        </package>"' >> ${REPO_PATH}/primary.xml
 
-        # Download RPM metadata for each package
-        curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-            "${GITLAB_API_URL}" | \
-        jq -r '.[] | select(.file_type=="rpm") | .file_name' | while read rpm_file; do
-          echo "Getting metadata for ${rpm_file}..."
-          yumdownloader --destdir=${REPO_PATH} --urls ${rpm_file%%.rpm} | \
-          while read url; do
-            curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-                --head \
-                "${CI_PROJECT_URL}/-/package_registry/rpm/${rpm_file}" | \
-            awk -v url="${CI_PROJECT_URL}/-/package_registry/rpm/${rpm_file}" \
-                -v file="${REPO_PATH}/${rpm_file}" \
-                'BEGIN {print "Location: " url > file; print "Size: " $2 > file}'
-          done
-        done
-        
-        echo "Created repo file:"
-        cat /etc/yum.repos.d/gitlab.repo
+        # Close primary.xml
+        echo "</metadata>" >> ${REPO_PATH}/primary.xml
+
+        echo "Created primary.xml:"
+        cat ${REPO_PATH}/primary.xml
       else
         echo "No RPM packages found in the registry"
       fi
 
-    # Create repo metadata using the package information
-    - createrepo_c --database --update --baseurl="${CI_PROJECT_URL}/-/package_registry/rpm" $REPO_PATH
+    # Create repo metadata using the primary.xml
+    - createrepo_c --update --baseurl="${CI_PROJECT_URL}/-/package_registry/rpm" --retain-old-md 5 $REPO_PATH
 
   artifacts:
     paths:
