@@ -54,6 +54,8 @@ update-repo-metadata:
     expire_in: 1 week
 
   rules:
-    - changes:
-        - packages/**/*
-    - when: manual      # Allow manual runs 
+    - if: $CI_PIPELINE_SOURCE == "package"         # Run on package registry changes
+      when: always
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: always
+    - when: manual                                 # Still allow manual runs as fallback 
