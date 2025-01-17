@@ -14,14 +14,14 @@ update-repo-metadata:
     # Debug: show API response and structure
     - |
       echo "API URL: ${GITLAB_API_URL}?package_type=rpm"
-      curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+      curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
           "${GITLAB_API_URL}?package_type=rpm" | tee /tmp/response.json
       echo "API Response Structure:"
       cat /tmp/response.json | jq '.'
 
-    # Generate .rpm links without downloading (simplified query for testing)
+    # Generate .rpm links without downloading
     - |
-      curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+      curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
           "${GITLAB_API_URL}?package_type=rpm" | \
       jq -r '.[] | select(.package_files) | .package_files[] | select(.file_type=="rpm") | 
       "[$CI_PROJECT_URL/-/package_registry/\(.file_name)]
