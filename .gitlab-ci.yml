@@ -14,9 +14,9 @@ update-repo-metadata:
     # Debug: show API response and structure
     - |
       echo "Project ID: ${CI_PROJECT_ID}"
-      echo "API URL: ${GITLAB_API_URL}?package_type=rpm"
+      echo "API URL: ${GITLAB_API_URL}"
       curl -v --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-          "${GITLAB_API_URL}?package_type=rpm" | tee /tmp/response.json
+          "${GITLAB_API_URL}" | tee /tmp/response.json
       echo "API Response Structure:"
       cat /tmp/response.json | jq '.'
 
@@ -24,7 +24,7 @@ update-repo-metadata:
     - |
       if [ "$(cat /tmp/response.json | jq '. | length')" -gt 0 ]; then
         curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-            "${GITLAB_API_URL}?package_type=rpm" | \
+            "${GITLAB_API_URL}" | \
         jq -r '.[] | select(.package_files) | .package_files[] | select(.file_type=="rpm") | 
         "[$CI_PROJECT_URL/-/package_registry/\(.file_name)]
         name=\(.file_name)
