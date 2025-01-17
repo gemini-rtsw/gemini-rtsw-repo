@@ -1,6 +1,6 @@
 variables:
   REPO_PATH: "repo"
-  API_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/rpm"
+  API_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}"
 
 update-repo-metadata:
   image: rockylinux:9
@@ -11,13 +11,19 @@ update-repo-metadata:
     # Create repo directory structure
     - mkdir -p $REPO_PATH
 
-    # Download all RPMs from the package registry
+    # Download all RPMs from the generic package repository
     - |
-      for package in $(curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
-                           "${API_URL}/rpms" | jq -r '.[] | .file_name'); do
-        curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
-             --output "$REPO_PATH/$package" \
-             "${API_URL}/rpms/files/$package"
+      curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+           --output "packages.json" \
+           "${API_URL}/packages?package_type=generic&package_name=rpm-repo"
+      
+      for package in $(jq -r '.[] | .versions[].files[] | .file_name' packages.json); do
+        if [[ $package == *.rpm ]]; then
+          echo "Downloading $package..."
+          curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+               --output "$REPO_PATH/$package" \
+               "${API_URL}/packages/generic/rpm-repo/1.0/$package"
+        fi
       done
 
     # Generate repository metadata
@@ -27,9 +33,10 @@ update-repo-metadata:
     - |
       cd $REPO_PATH/repodata
       for file in *; do
+        echo "Uploading $file..."
         curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
              --upload-file "$file" \
-             "${API_URL}/repodata/$file"
+             "${API_URL}/packages/generic/rpm-repo/1.0/repodata/$file"
       done
 
   artifacts:
@@ -38,8 +45,6 @@ update-repo-metadata:
     expire_in: 1 week
 
   rules:
-    - if: $CI_PIPELINE_SOURCE == "package"
-      when: always
-    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "package" && $CI_PIPELINE_SOURCE_PACKAGE_TYPE == "generic"
       when: always
     - when: manual 
