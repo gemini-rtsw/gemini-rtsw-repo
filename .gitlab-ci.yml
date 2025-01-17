@@ -1,69 +1,28 @@
 variables:
-  REPO_PATH: "repo"
+  REPO_PATH: "rpms"
   API_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}"
 
 update-repo-metadata:
-  image: rockylinux:9
-  script:
+  image: docker:20.10.16
+  services:
+    - docker:20.10.16-dind
+  before_script:
     # Install required tools
-    - dnf install -y --allowerasing curl jq createrepo_c
-
-    # Create repo directory structure
+    - apk add --no-cache curl jq bash
+    
+  script:
+    # Create repo directory
     - mkdir -p $REPO_PATH
-
-    # Download all RPMs and create repo metadata
+    
+    # Modify sync_repo.sh to use CI variables
     - |
-      # Get list of RPMs from generic package repository
-      echo "Fetching RPM package list..."
-      PACKAGE_LIST=$(curl --silent --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-           "${API_URL}/packages/generic/rpm-repo/1.0" | \
-           grep -o '"name":"[^"]*\.rpm"' | sed 's/"name":"//;s/"//')
-
-      echo "Package list content:"
-      echo "$PACKAGE_LIST"
-      
-      # Download all RPM files
-      echo "Looking for RPM files..."
-      for rpm in $PACKAGE_LIST; do
-        if [[ "$rpm" == *.rpm ]]; then
-          echo "Downloading RPM: $rpm"
-          
-          # Download the RPM file
-          HTTP_CODE=$(curl --silent --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-               --write-out "%{http_code}" \
-               --output "$REPO_PATH/$rpm" \
-               "${API_URL}/packages/generic/rpm-repo/1.0/$rpm")
-          
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "Error downloading $rpm (HTTP $HTTP_CODE)"
-            cat "$REPO_PATH/$rpm" || true
-            continue
-          fi
-          
-          # Verify file size
-          if [ $(stat -c%s "$REPO_PATH/$rpm") -lt 1024 ]; then
-            echo "Warning: $rpm appears to be too small or empty"
-            continue
-          fi
-        fi
-      done
-
-      # List downloaded RPMs
-      echo "Downloaded RPMs:"
-      ls -l $REPO_PATH/*.rpm || echo "No RPMs found"
-
-    # Generate repository metadata
-    - createrepo_c $REPO_PATH
-
-    # Upload the repodata back to GitLab
-    - |
-      cd $REPO_PATH/repodata
-      for file in *; do
-        echo "Uploading $file..."
-        curl --silent --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-             --upload-file "$file" \
-             "${API_URL}/packages/generic/rpm-repo/1.0/repodata/$file"
-      done
+      sed -i "s|TOKEN=\".*\"|TOKEN=\"${CI_JOB_TOKEN}\"|" sync_repo.sh
+      sed -i "s|PROJECT_ID=\".*\"|PROJECT_ID=\"${CI_PROJECT_ID}\"|" sync_repo.sh
+      sed -i "s|https://gitlab.com/api/v4|${CI_API_V4_URL}|g" sync_repo.sh
+    
+    # Make script executable and run it
+    - chmod +x sync_repo.sh
+    - ./sync_repo.sh
 
   artifacts:
     paths:
