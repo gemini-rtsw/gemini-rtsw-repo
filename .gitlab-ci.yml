@@ -45,6 +45,6 @@ update-repo-metadata:
     expire_in: 1 week
 
   rules:
-    - if: $CI_PIPELINE_SOURCE == "package" && $CI_PIPELINE_SOURCE_PACKAGE_TYPE == "generic"
+    - if: $CI_PIPELINE_SOURCE == "package" || $CI_PIPELINE_SOURCE == "push"
       when: always
     - when: manual 
