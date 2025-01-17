@@ -11,26 +11,23 @@ update-repo-metadata:
     # Create repo directory
     - mkdir -p $REPO_PATH/repodata
 
-    # Get list of RPMs from the generic package registry
+    # Get list of RPMs and debug the response
     - |
+      echo "Getting package list..."
       curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
         "https://gitlab.com/api/v4/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/" \
-        | jq -r '.[] | .file_name' > ${REPO_PATH}/package_list.txt
+        | tee /tmp/response.json
+      
+      echo "API Response:"
+      cat /tmp/response.json | jq '.'
 
-    # Create repodata
-    - |
-      for rpm in $(cat ${REPO_PATH}/package_list.txt); do
-        curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-          -L -o "${REPO_PATH}/${rpm}" \
-          "https://gitlab.com/api/v4/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/${rpm}"
-      done
-
-    # Create repo metadata
+    # Create repodata once we fix the jq query
     - createrepo_c --database $REPO_PATH
 
   artifacts:
     paths:
       - ${REPO_PATH}
+      - /tmp/response.json
     expire_in: 1 week
 
   rules:
