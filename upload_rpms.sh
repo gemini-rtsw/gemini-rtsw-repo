@@ -4,6 +4,7 @@
 TOKEN="glpat-eX-vwr3j7nPZmtYohnXF" # Replace this with your token
 PROJECT_ID="66226575" # GitLab project ID
 RPM_DIR="./rpms" # Directory where RPMs are stored
+API_URL="https://gitlab.com/api/v4/projects/${PROJECT_ID}"
 
 # Upload each RPM in the directory
 for rpm in "$RPM_DIR"/*.rpm; do
@@ -17,7 +18,7 @@ for rpm in "$RPM_DIR"/*.rpm; do
     ARCH=$(rpm -qp --queryformat '%{ARCH}' "$rpm")
     
     echo "Uploading $rpm..."
-    curl --silent --show-error \
+    RESPONSE=$(curl --silent --show-error \
          --header "PRIVATE-TOKEN: $TOKEN" \
          --form "file=@$rpm" \
          --form "name=$NAME" \
@@ -25,13 +26,15 @@ for rpm in "$RPM_DIR"/*.rpm; do
          --form "release=$RELEASE" \
          --form "arch=$ARCH" \
          --form "distribution=el8" \
-         "https://gitlab.com/api/v4/projects/$PROJECT_ID/packages/rpm/rpms"
+         "${API_URL}/packages/generic/rpm-repo/1.0/$(basename "$rpm")")
 
-    if [ $? -eq 0 ]; then
-      echo "Successfully uploaded: $rpm"
-    else
+    # Check for errors in response
+    if echo "$RESPONSE" | grep -q "error"; then
       echo "Failed to upload: $rpm"
+      echo "Error: $RESPONSE"
       exit 1
+    else
+      echo "Successfully uploaded: $rpm"
     fi
   else
     echo "No RPMs found in $RPM_DIR"
