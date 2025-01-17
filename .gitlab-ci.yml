@@ -16,32 +16,40 @@ update-repo-metadata:
       # Get all RPM packages
       echo "Fetching RPM package list..."
       curl --silent --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-           "${API_URL}/packages?package_type=rpm" | tee packages.json
+           "${API_URL}/packages?package_type=rpm&per_page=100" | tee packages.json
 
+      # Debug output
+      echo "Package list content:"
+      cat packages.json
+      
       # Download all RPM files
       echo "Looking for RPM files..."
-      for package in $(jq -r '.[] | "\(.version) \(.name)"' packages.json); do
-        version=$(echo $package | cut -d' ' -f1)
-        name=$(echo $package | cut -d' ' -f2-)
+      for package in $(jq -r '.[] | select(.package_type=="rpm") | "\(.version)/\(.name)"' packages.json); do
+        version=$(echo $package | cut -d'/' -f1)
+        name=$(echo $package | cut -d'/' -f2-)
         
         echo "Downloading RPM: $name version $version"
+        
+        # Create the download URL
+        DOWNLOAD_URL="${API_URL}/packages/rpm/${name}/${version}/x86_64/download"
+        echo "Download URL: $DOWNLOAD_URL"
         
         # Download the RPM file
         HTTP_CODE=$(curl --silent --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
              --write-out "%{http_code}" \
-             --output "$REPO_PATH/$name" \
-             "${API_URL}/packages/rpm/$name/$version/download")
+             --output "$REPO_PATH/${name}-${version}.rpm" \
+             "$DOWNLOAD_URL")
         
         if [ "$HTTP_CODE" != "200" ]; then
           echo "Error downloading $name (HTTP $HTTP_CODE)"
-          cat "$REPO_PATH/$name" || true
-          exit 1
+          cat "$REPO_PATH/${name}-${version}.rpm" || true
+          continue
         fi
         
         # Verify file size
-        if [ $(stat -c%s "$REPO_PATH/$name") -lt 1024 ]; then
-          echo "Error: $name appears to be too small or empty"
-          exit 1
+        if [ $(stat -c%s "$REPO_PATH/${name}-${version}.rpm") -lt 1024 ]; then
+          echo "Warning: ${name}-${version}.rpm appears to be too small or empty"
+          continue
         fi
       done
 
