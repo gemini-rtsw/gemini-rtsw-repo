@@ -6,7 +6,7 @@ update-repo-metadata:
   image: rockylinux:9
   script:
     # Install required packages with --allowerasing to handle curl conflict
-    - dnf install -y --allowerasing createrepo_c curl jq
+    - dnf install -y --allowerasing createrepo_c curl jq file
 
     # Create repo directory
     - mkdir -p $REPO_PATH
@@ -15,7 +15,7 @@ update-repo-metadata:
     - |
       echo "Downloading RPM..."
       curl -v --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/34287433/package_files/170038518/download" \
+          "${CI_PROJECT_URL}/-/package_registry/rpm/ecsmotorrecord-devel-2.8.22-0.git.19.a2242a8.x86_64.rpm" \
           -o "${REPO_PATH}/ecsmotorrecord-devel-2.8.22-0.git.19.a2242a8.x86_64.rpm"
       
       echo "Checking downloaded file:"
