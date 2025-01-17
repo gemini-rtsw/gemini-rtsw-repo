@@ -6,7 +6,7 @@ update-repo-metadata:
   image: rockylinux:9
   script:
     # Install required packages with --allowerasing to handle curl conflict
-    - dnf install -y --allowerasing createrepo_c curl jq rpm-build
+    - dnf install -y --allowerasing createrepo_c curl jq yum-utils
 
     # Create repo directory
     - mkdir -p $REPO_PATH
@@ -27,30 +27,35 @@ update-repo-metadata:
         curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
             "${GITLAB_API_URL}" | \
         jq -r '.[] | select(.file_type=="rpm") | 
-        "[$CI_PROJECT_URL/-/package_registry/rpm/\(.file_name)]
-        name=\(.file_name)
+        "[gitlab-rpm-repo]
+        name=GitLab RPM Repository
         baseurl=$CI_PROJECT_URL/-/package_registry/rpm
         enabled=1
-        gpgcheck=0"' > ${REPO_PATH}/gitlab.repo
+        gpgcheck=0"' > /etc/yum.repos.d/gitlab.repo
 
-        # Download RPM headers for each package
+        # Download RPM metadata for each package
         curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
             "${GITLAB_API_URL}" | \
         jq -r '.[] | select(.file_type=="rpm") | .file_name' | while read rpm_file; do
-          echo "Getting headers for ${rpm_file}..."
-          curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-              -r 0-8192 \
-              "${CI_PROJECT_URL}/-/package_registry/rpm/${rpm_file}" \
-              -o "${REPO_PATH}/${rpm_file}"
+          echo "Getting metadata for ${rpm_file}..."
+          yumdownloader --destdir=${REPO_PATH} --urls ${rpm_file%%.rpm} | \
+          while read url; do
+            curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+                --head \
+                "${CI_PROJECT_URL}/-/package_registry/rpm/${rpm_file}" | \
+            awk -v url="${CI_PROJECT_URL}/-/package_registry/rpm/${rpm_file}" \
+                -v file="${REPO_PATH}/${rpm_file}" \
+                'BEGIN {print "Location: " url > file; print "Size: " $2 > file}'
+          done
         done
         
         echo "Created repo file:"
-        cat ${REPO_PATH}/gitlab.repo
+        cat /etc/yum.repos.d/gitlab.repo
       else
         echo "No RPM packages found in the registry"
       fi
 
-    # Create repo metadata using the RPM headers
+    # Create repo metadata using the package information
     - createrepo_c --database --update --baseurl="${CI_PROJECT_URL}/-/package_registry/rpm" $REPO_PATH
 
   artifacts:
