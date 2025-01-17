@@ -32,15 +32,19 @@ update-repo-metadata:
         # Download RPM files
         for file in $(jq -r '.[] | select(.file_name | endswith(".rpm")) | .file_name' "files_${package_id}.json"); do
           echo "Downloading $file..."
+          encoded_file=$(echo "$file" | jq -sRr @uri)
+          echo "Encoded filename: $encoded_file"
+          echo "Download URL: ${API_URL}/packages/${package_id}/package_files/${encoded_file}/download"
+          
           HTTP_CODE=$(curl -v --silent --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
                --write-out "%{http_code}" \
                --output "$REPO_PATH/$file" \
-               "${API_URL}/packages/${package_id}/package_files/${file##*/}/download")
+               "${API_URL}/packages/${package_id}/package_files/${encoded_file}/download")
           
           if [ "$HTTP_CODE" != "200" ]; then
             echo "Error downloading $file (HTTP $HTTP_CODE)"
             # Print the response content for debugging
-            cat "$REPO_PATH/$file"
+            cat "$REPO_PATH/$file" || true
             # Let's also see what's in the files JSON
             echo "Package files JSON:"
             cat "files_${package_id}.json"
