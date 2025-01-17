@@ -13,17 +13,22 @@ update-repo-metadata:
 
     # Download all RPMs from the generic package repository
     - |
-      curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+      # List all packages
+      echo "Fetching package list..."
+      curl --silent --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
            --output "packages.json" \
            "${API_URL}/packages?package_type=generic&package_name=rpm-repo"
       
-      for package in $(jq -r '.[] | .versions[].files[] | .file_name' packages.json); do
-        if [[ $package == *.rpm ]]; then
-          echo "Downloading $package..."
-          curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
-               --output "$REPO_PATH/$package" \
-               "${API_URL}/packages/generic/rpm-repo/1.0/$package"
-        fi
+      # Debug output
+      echo "Package list response:"
+      cat packages.json
+      
+      # Download each RPM
+      for package in $(jq -r '.[] | select(.name=="rpm-repo") | .versions[].files[] | select(.file_name | endswith(".rpm")) | .file_name' packages.json); do
+        echo "Downloading $package..."
+        curl --silent --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+             --output "$REPO_PATH/$package" \
+             "${API_URL}/packages/generic/rpm-repo/1.0/$package"
       done
 
     # Generate repository metadata
@@ -34,7 +39,7 @@ update-repo-metadata:
       cd $REPO_PATH/repodata
       for file in *; do
         echo "Uploading $file..."
-        curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+        curl --silent --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
              --upload-file "$file" \
              "${API_URL}/packages/generic/rpm-repo/1.0/repodata/$file"
       done
