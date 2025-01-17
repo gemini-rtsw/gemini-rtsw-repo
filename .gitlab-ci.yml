@@ -6,28 +6,24 @@ update-repo-metadata:
   image: centos:7
   script:
     # Install required packages
-    - yum install -y createrepo_c wget curl jq
+    - yum install -y createrepo_c curl jq
 
     # Create repo directory
     - mkdir -p $REPO_PATH
 
-    # Download RPM metadata and packages
+    # Generate .rpm links without downloading
     - |
-      # Get list of all RPM packages
       curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
           "${GITLAB_API_URL}?package_type=rpm" | \
-      jq -r '.[] | .versions[] | .package_files[] | select(.file_type=="rpm") | .file_name + "," + .download_path' > package_list.txt
+      jq -r '.[] | .versions[] | .package_files[] | select(.file_type=="rpm") | 
+      "[$CI_PROJECT_URL/-/package_registry/\(.file_name)]
+      name=\(.file_name)
+      baseurl=$CI_PROJECT_URL/-/package_registry/rpm
+      enabled=1
+      gpgcheck=0"' > ${REPO_PATH}/gitlab.repo
 
-      # Download each RPM to the repo directory
-      while IFS=, read -r filename download_path; do
-        echo "Downloading $filename..."
-        curl --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
-            -o "${REPO_PATH}/${filename}" \
-            "${CI_API_V4_URL}${download_path}"
-      done < package_list.txt
-
-    # Create/update repo metadata
-    - createrepo_c --update $REPO_PATH
+    # Create repo metadata using only the package information
+    - createrepo_c --database --update $REPO_PATH
 
   artifacts:
     paths:
@@ -36,5 +32,5 @@ update-repo-metadata:
 
   rules:
     - changes:
-        - packages/**/*  # Trigger on package changes
+        - packages/**/*
     - when: manual      # Allow manual runs 
