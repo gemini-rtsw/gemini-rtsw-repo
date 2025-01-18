@@ -48,16 +48,24 @@ The repository is automatically maintained by GitLab CI:
 
 To use this RPM repository in your system:
 
-1. Add the repository:
+1. Create a new repository configuration file at `/etc/yum.repos.d/gitlab-rpm-repo.repo` with these contents:
 
-    dnf config-manager --add-repo https://gitlab.com/api/v4/projects/66226575/packages/rpm/generic/
+    [gitlab-rpm-repo]
+    name=GitLab RPM Repository
+    baseurl=https://oauth2:YOUR_GITLAB_TOKEN@gitlab.com/api/v4/projects/66226575/packages/generic/rpm-repo/1.0/
+    enabled=1
+    gpgcheck=0
 
-2. Configure repository settings:
+2. Replace `YOUR_GITLAB_TOKEN` with your GitLab personal access token.
 
-    dnf config-manager --save \
-        --setopt=gitlab*.gpgcheck=0 \
-        --setopt=gitlab*.repo_gpgcheck=0 \
-        --setopt=gitlab*.sslverify=1
+3. Update the package metadata and install packages using dnf:
+   - Update metadata: `dnf makecache --refresh`
+   - Install packages: `dnf install PACKAGE_NAME`
+
+Note: If you need PowerTools and EPEL repositories, install and enable them before installing packages:
+- Install EPEL: `dnf install epel-release`
+- Install DNF plugins: `dnf install dnf-plugins-core`
+- Enable PowerTools: `dnf config-manager --set-enabled powertools`
 
 ## Requirements
 
