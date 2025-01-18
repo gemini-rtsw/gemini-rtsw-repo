@@ -32,11 +32,7 @@ sync-repository:
     paths:
       - ${REPO_PATH}/*.log
     expire_in: 1 week
-    # Add max size limit to prevent 413 errors
-    max_size: 1G
-    # Enable artifact compression
     when: on_success
-    expose_as: 'rpm-repository'
 
   rules:
     - if: $CI_PIPELINE_SOURCE == "package"
