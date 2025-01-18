@@ -28,14 +28,8 @@ sync-repository:
     - chmod +x sync_repo.sh
     - ./sync_repo.sh
 
-  artifacts:
-    paths:
-      - ${REPO_PATH}/*.log
-    expire_in: 1 week
-    when: on_success
-
   rules:
-    - if: $CI_PIPELINE_SOURCE == "package"
+    - if: $CI_PIPELINE_SOURCE == "package_registry"
       when: always
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: always
