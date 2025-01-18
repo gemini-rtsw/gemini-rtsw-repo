@@ -1,57 +1,77 @@
-# Gemini RTSW RPM Repository
+# RPM Repository Management
 
-This repository contains tools and configuration files for managing and uploading RPM packages to the Gemini RTSW Package Registry.
+This repository serves as an RPM package repository using GitLab's Package Registry. It includes scripts for managing RPM packages and maintaining repository metadata.
 
-## Contents
+## Repository Structure
 
-- **`Dockerfile`**: A Dockerfile for creating an image based on Rocky Linux 9 with the required Gemini RTSW software.
-- **`gem-rtsw.repo`**: Repository configuration file for accessing Gemini RTSW RPMs.
-- **`upload_rpms.sh`**: A script to upload RPM packages to the GitLab Package Registry.
-- **`rpms/`**: Directory where RPM packages are downloaded and stored.
+- `upload_rpm.sh` - Script to upload a single RPM package
+- `sync_repo.sh` - Script to sync multiple RPMs and update metadata
+- `.gitlab-ci.yml` - CI configuration for repository maintenance
+- `rpms/` - Directory containing RPM packages
 
 ## Usage
 
-### 1. Prepare the Environment
-Ensure you have the following:
-- A valid GitLab personal access token with `write_registry` permissions.
-- The `rpm` and `curl` tools installed on your system.
+### 1. Uploading a Single RPM
 
-### 2. Download RPMs
-Run the following command to download all RPMs from the specified repositories into the `rpms/` directory:
-```bash
-dnf repoquery --disablerepo="*" \
-    --enablerepo="gem-rtsw-epics-base-unstable-2024q3" \
-    --enablerepo="gem-rtsw-support-unstable-2024q3" \
-    --enablerepo="gem-rtsw-app-unstable-2024q3" \
-    --enablerepo="gem-rtsw-common-unstable-2024q3" \
-    --queryformat="%{name}" | xargs -r -n 1 dnf download --resolve --destdir=./rpms
-```
+To upload a single RPM package:
 
-### 3. Upload RPMs
-Use the `upload_rpms.sh` script to upload RPMs to the GitLab Package Registry:
-```bash
-./upload_rpms.sh
-```
+    ./upload_rpm.sh path/to/your/package.rpm
 
-Update the `TOKEN` variable in the script with your personal access token before running.
+This script will:
+- Validate the RPM file
+- Upload it to the GitLab Package Registry
+- Trigger a CI pipeline to update repository metadata
 
-### 4. Verify Uploads
-Check the uploaded RPMs in the **Packages & Registries > Package Registry** section of your GitLab project.
+### 2. Syncing Multiple RPMs
 
----
+For bulk operations, use the sync script:
+
+    ./sync_repo.sh
+
+The sync script will:
+- Compare local RPMs in `rpms/` with remote repository
+- Download missing RPMs from remote
+- Upload new local RPMs
+- Generate and upload repository metadata
+- Trigger a CI pipeline if not running in CI
+
+### 3. Automatic Repository Maintenance
+
+The repository is automatically maintained by GitLab CI:
+
+- When an RPM is uploaded, a pipeline is triggered
+- The pipeline downloads all RPMs
+- Creates fresh repository metadata using createrepo_c
+- Uploads the metadata back to GitLab
+
+### 4. Using the Repository
+
+To use this RPM repository in your system:
+
+1. Add the repository:
+
+    dnf config-manager --add-repo https://gitlab.com/api/v4/projects/66226575/packages/rpm/generic/
+
+2. Configure repository settings:
+
+    dnf config-manager --save \
+        --setopt=gitlab*.gpgcheck=0 \
+        --setopt=gitlab*.repo_gpgcheck=0 \
+        --setopt=gitlab*.sslverify=1
+
+## Requirements
+
+- bash
+- curl
+- git
+- Docker (for CI runner)
+- GitLab access token (for local operations)
 
 ## Notes
-- The `rpms/` directory is used for temporary storage of downloaded RPMs.
-- The `upload_rpms.sh` script requires an active internet connection and valid permissions on the GitLab project.
 
----
-
-## Contributing
-Feel free to submit issues or merge requests to enhance this repository.
-
----
-
-## License
-This project is licensed under the MIT License.
+- The repository uses GitLab's Package Registry for storage
+- Repository metadata is automatically updated after changes
+- CI pipelines ensure consistency between local and remote packages
+- Authentication is handled via GitLab tokens
 
 

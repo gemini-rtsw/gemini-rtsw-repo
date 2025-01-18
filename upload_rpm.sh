@@ -33,3 +33,11 @@ curl --header "PRIVATE-TOKEN: $TOKEN" \
 
 echo "Upload complete: $RPM_FILE"
 
+# Trigger pipeline via git push
+echo "Triggering repository sync pipeline via git push..."
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+git commit --allow-empty -m "Trigger sync after uploading $(basename "$RPM_FILE")"
+git push origin $CURRENT_BRANCH
+
+echo "Pipeline triggered via push"
+

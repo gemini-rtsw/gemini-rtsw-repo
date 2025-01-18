@@ -9,8 +9,10 @@ RPM_DIR="./rpms"
 # Set API URL based on environment
 if [ -z "$CI_API_V4_URL" ]; then
     API_URL="https://gitlab.com/api/v4"
+    IS_CI=false
 else
     API_URL="${CI_API_V4_URL}"
+    IS_CI=true
 fi
 
 # Set auth header based on environment
@@ -145,4 +147,13 @@ find "$RPM_DIR/repodata" -type f | while read -r file; do
          "$API_URL/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/$relative_path"
 done
 
-echo "Repository sync complete!" 
+echo "Repository sync complete!"
+
+# Only trigger pipeline if not running in CI
+if [ "$IS_CI" = false ]; then
+    echo "Triggering repository sync pipeline via git push..."
+    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    git commit --allow-empty -m "Trigger sync after repository update"
+    git push origin $CURRENT_BRANCH
+    echo "Pipeline triggered via push"
+fi 
