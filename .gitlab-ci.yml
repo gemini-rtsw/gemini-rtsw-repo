@@ -1,24 +1,28 @@
 variables:
   REPO_PATH: "rpms"
   API_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}"
+  PACKAGE_ID: "34287433"
 
-update-repo-metadata:
+sync-repository:
   image: docker:20.10.16
   services:
     - docker:20.10.16-dind
   before_script:
     # Install required tools
-    - apk add --no-cache curl jq bash
+    - apk add --no-cache curl jq bash file
     
   script:
     # Create repo directory
     - mkdir -p $REPO_PATH
     
-    # Modify sync_repo.sh to use CI variables
+    # Update sync_repo.sh with CI variables
     - |
-      sed -i "s|TOKEN=\".*\"|TOKEN=\"${CI_JOB_TOKEN}\"|" sync_repo.sh
-      sed -i "s|PROJECT_ID=\".*\"|PROJECT_ID=\"${CI_PROJECT_ID}\"|" sync_repo.sh
-      sed -i "s|https://gitlab.com/api/v4|${CI_API_V4_URL}|g" sync_repo.sh
+      sed -i \
+        -e "s|TOKEN=\".*\"|TOKEN=\"${CI_JOB_TOKEN}\"|" \
+        -e "s|PROJECT_ID=\".*\"|PROJECT_ID=\"${CI_PROJECT_ID}\"|" \
+        -e "s|PACKAGE_ID=\".*\"|PACKAGE_ID=\"${PACKAGE_ID}\"|" \
+        -e "s|https://gitlab.com/api/v4|${CI_API_V4_URL}|g" \
+        sync_repo.sh
     
     # Make script executable and run it
     - chmod +x sync_repo.sh
@@ -30,6 +34,8 @@ update-repo-metadata:
     expire_in: 1 week
 
   rules:
-    - if: $CI_PIPELINE_SOURCE == "package" || $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_PIPELINE_SOURCE == "package"
+      when: always
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: always
     - when: manual 
