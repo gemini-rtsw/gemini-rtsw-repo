@@ -29,7 +29,7 @@ sync-repository:
     - ./sync_repo.sh
 
   rules:
-    - if: $CI_PIPELINE_SOURCE == "package_registry"
+    - if: '$CI_PIPELINE_SOURCE == "trigger" && $PACKAGE_EVENT == "push"'
       when: always
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: always
