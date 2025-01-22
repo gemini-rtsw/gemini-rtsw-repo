@@ -15,10 +15,21 @@ RUN dnf install -y epel-release && \
     dnf install -y dnf-plugins-core && \
     dnf config-manager --set-enabled powertools
 
-# Update metadata and install ALL packages from our repo
+# Install base dependencies first
+RUN dnf install -y \
+    gnaohiredis \
+    gnaojsonc \
+    sysco \
+    agSeq \
+    oiwfsgw \
+    pcas \
+    libcas \
+    libgdd
+
+# Update metadata and install packages
 RUN dnf makecache --refresh && \
     dnf install -y conserver conserver-client && \
-    dnf install -y $(dnf list available --repo gitlab-rpm-repo -q | grep -v "Available Packages" | cut -f1 -d' ')
+    dnf install -y --allowerasing $(dnf list available --repo gitlab-rpm-repo -q | grep -v "Available Packages" | cut -f1 -d' ')
 
 # Verify installation
 CMD rpm -qa
