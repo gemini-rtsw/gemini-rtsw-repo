@@ -1,0 +1,11 @@
+# RPM repository files
+rpms/
+*.rpm
+
+# Repository metadata
+repodata/
+*.repo
+
+# Temporary files that might be created during sync
+*.tmp
+*.temp 

@@ -2,8 +2,15 @@ variables:
   REPO_PATH: "rpms"
   API_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}"
   PACKAGE_ID: "34287433"
+  DOCKER_IMAGE_NAME: "${CI_REGISTRY_IMAGE}/rocky8-packages"
 
+stages:
+  - sync
+  - build
+
+# First stage to sync the repository
 sync-repository:
+  stage: sync
   image: docker:20.10.16
   services:
     - docker:20.10.16-dind
@@ -28,6 +35,26 @@ sync-repository:
     - chmod +x sync_repo.sh
     - ./sync_repo.sh
 
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "trigger" && $PACKAGE_EVENT == "push"'
+      when: always
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: always
+    - when: manual
+
+# Build and push Docker image
+build-and-push-image:
+  stage: build
+  image: docker:20.10.16
+  services:
+    - docker:20.10.16-dind
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build -t $DOCKER_IMAGE_NAME:$CI_COMMIT_SHA .
+    - docker tag $DOCKER_IMAGE_NAME:$CI_COMMIT_SHA $DOCKER_IMAGE_NAME:latest
+    - docker push $DOCKER_IMAGE_NAME:$CI_COMMIT_SHA
+    - docker push $DOCKER_IMAGE_NAME:latest
   rules:
     - if: '$CI_PIPELINE_SOURCE == "trigger" && $PACKAGE_EVENT == "push"'
       when: always

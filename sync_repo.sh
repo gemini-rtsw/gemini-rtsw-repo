@@ -117,14 +117,25 @@ echo "4. Cleaning old repository metadata..."
 rm -rf "$RPM_DIR/repodata"
 
 echo "5. Generating repository metadata..."
+echo "Starting Docker container to run createrepo_c..."
 docker run --rm \
     -v "$(pwd)/$RPM_DIR:/repo:Z" \
     rockylinux:9 \
     bash -c "set -x && \
-             dnf install -y createrepo_c && \
+             echo 'Updating DNF cache...' && \
+             dnf clean all && \
+             dnf makecache || { echo 'ERROR: Failed to update DNF cache'; exit 1; } && \
+             echo 'Installing createrepo_c...' && \
+             dnf install -y --setopt=timeout=300 createrepo_c || { echo 'ERROR: Failed to install createrepo_c'; exit 1; } && \
              echo 'Contents of /repo:' && \
              ls -la /repo && \
-             createrepo_c --verbose /repo"
+             echo 'Running createrepo_c...' && \
+             createrepo_c --verbose /repo || { echo 'ERROR: Failed to create repository metadata'; exit 1; }" || {
+    echo "ERROR: Repository metadata generation failed"
+    exit 1
+}
+
+echo "Repository metadata generated successfully"
 
 echo "6. Uploading metadata files..."
 # First, delete old repodata from GitLab

@@ -15,10 +15,10 @@ RUN dnf install -y epel-release && \
     dnf install -y dnf-plugins-core && \
     dnf config-manager --set-enabled powertools
 
-# Update metadata and install package
+# Update metadata and install ALL packages from our repo
 RUN dnf makecache --refresh && \
     dnf install -y conserver conserver-client && \
-    dnf install -y softTCS_mk
+    dnf install -y $(dnf list available --repo gitlab-rpm-repo -q | grep -v "Available Packages" | cut -f1 -d' ')
 
 # Verify installation
-CMD rpm -qa | grep softTCS_mk
+CMD rpm -qa
