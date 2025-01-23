@@ -4,15 +4,12 @@
 TOKEN="glpat-eX-vwr3j7nPZmtYohnXF"
 PROJECT_ID="66226575"
 PACKAGE_NAME="rpm"  # The package name in GitLab package registry
-RPM_DIR="./rpms"
 
 # Set API URL based on environment
 if [ -z "$CI_API_V4_URL" ]; then
     API_URL="https://gitlab.com/api/v4"
-    IS_CI=false
 else
     API_URL="${CI_API_V4_URL}"
-    IS_CI=true
 fi
 
 # Set auth header based on environment
@@ -22,12 +19,6 @@ else
     AUTH_HEADER="JOB-TOKEN: $CI_JOB_TOKEN"
 fi
 
-# Ensure RPM directory exists
-if [ ! -d "$RPM_DIR" ]; then
-    echo "Creating RPM directory: $RPM_DIR"
-    mkdir -p "$RPM_DIR"
-fi
-
 echo "1. Getting package ID for $PACKAGE_NAME..."
 # Get the package ID dynamically
 PACKAGE_ID=$(curl --silent --header "$AUTH_HEADER" \
@@ -35,8 +26,8 @@ PACKAGE_ID=$(curl --silent --header "$AUTH_HEADER" \
     grep -o '"id":[0-9]*' | head -1 | cut -d':' -f2)
 
 if [ -z "$PACKAGE_ID" ]; then
-    echo "Error: Could not find package ID for $PACKAGE_NAME"
-    exit 1
+    echo "No remote repository found - no packages to list"
+    exit 0
 fi
 
 echo "Found package ID: $PACKAGE_ID"
