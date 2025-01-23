@@ -15,8 +15,9 @@ RUN dnf install -y epel-release && \
     dnf install -y dnf-plugins-core && \
     dnf config-manager --set-enabled powertools
 
-# Update metadata and install ALL packages from our repo
+# Update metadata and install packages
 RUN dnf makecache --refresh && \
+    dnf install -y gcc-c++ && \
     dnf install -y conserver conserver-client && \
     dnf install -y --nobest --allowerasing $(dnf list available --repo gitlab-rpm-repo -q | grep -v "Available Packages" | cut -f1 -d' ')
 
