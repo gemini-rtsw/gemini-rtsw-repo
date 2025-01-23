@@ -18,7 +18,7 @@ RUN dnf install -y epel-release && \
 # Update metadata and install ALL packages from our repo
 RUN dnf makecache --refresh && \
     dnf install -y conserver conserver-client && \
-    dnf install -y --allowerasing $(dnf list available --repo gitlab-rpm-repo -q | grep -v "Available Packages" | cut -f1 -d' ')
+    dnf install -y --allowerasing $(dnf list available --repo gitlab-rpm-repo -q | grep -v "Available Packages" | grep -v "gnao" | cut -f1 -d' ')
 
 # Verify installation
 CMD rpm -qa
