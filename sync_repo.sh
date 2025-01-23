@@ -29,47 +29,54 @@ if [ ! -d "$RPM_DIR" ]; then
 fi
 
 echo "1. Getting package ID for $PACKAGE_NAME..."
-# Get the package ID dynamically
-PACKAGE_ID=$(curl --silent --header "$AUTH_HEADER" \
-    "$API_URL/projects/${PROJECT_ID}/packages?package_name=${PACKAGE_NAME}" | \
-    grep -o '"id":[0-9]*' | head -1 | cut -d':' -f2)
+# Use environment variable if set, otherwise fetch dynamically
+if [ -n "$PACKAGE_ID" ]; then
+    echo "Using package ID from environment: $PACKAGE_ID"
+else
+    # Get the package ID dynamically
+    PACKAGE_ID=$(curl --silent --header "$AUTH_HEADER" \
+        "$API_URL/projects/${PROJECT_ID}/packages?package_name=${PACKAGE_NAME}" | \
+        grep -o '"id":[0-9]*' | head -1 | cut -d':' -f2)
 
-if [ -z "$PACKAGE_ID" ]; then
-    echo "Error: Could not find package ID for $PACKAGE_NAME"
-    exit 1
+    if [ -z "$PACKAGE_ID" ]; then
+        echo "No remote repository found - will create it by uploading local packages"
+        remote_files=""
+    else
+        echo "Found package ID: $PACKAGE_ID"
+    fi
 fi
 
-echo "Found package ID: $PACKAGE_ID"
+if [ -n "$PACKAGE_ID" ]; then
+    echo "2. Getting list of remote RPMs..."
+    # Get package versions from the package registry with pagination
+    page=1
+    remote_files=""
+    while true; do
+        response=$(curl --silent --header "$AUTH_HEADER" \
+            "$API_URL/projects/${PROJECT_ID}/packages/${PACKAGE_ID}/package_files?per_page=100&page=${page}")
+        
+        # Break if empty response or no more items
+        if [ -z "$response" ] || [ "$response" = "[]" ]; then
+            break
+        fi
+        
+        # Extract filenames and append to list
+        page_files=$(echo "$response" | grep -o '"file_name":"[^"]*\.rpm"' | sed 's/"file_name":"//;s/"//')
+        if [ -n "$page_files" ]; then
+            remote_files="${remote_files}${page_files}"$'\n'
+        else
+            break
+        fi
+        
+        ((page++))
+    done
 
-echo "2. Getting list of remote RPMs..."
-# Get package versions from the package registry with pagination
-page=1
-remote_files=""
-while true; do
-    response=$(curl --silent --header "$AUTH_HEADER" \
-        "$API_URL/projects/${PROJECT_ID}/packages/${PACKAGE_ID}/package_files?per_page=100&page=${page}")
-    
-    # Break if empty response or no more items
-    if [ -z "$response" ] || [ "$response" = "[]" ]; then
-        break
-    fi
-    
-    # Extract filenames and append to list
-    page_files=$(echo "$response" | grep -o '"file_name":"[^"]*\.rpm"' | sed 's/"file_name":"//;s/"//')
-    if [ -n "$page_files" ]; then
-        remote_files="${remote_files}${page_files}"$'\n'
-    else
-        break
-    fi
-    
-    ((page++))
-done
+    # Remove empty lines and duplicates
+    remote_files=$(echo "$remote_files" | grep -v '^$' | sort -u)
 
-# Remove empty lines and duplicates
-remote_files=$(echo "$remote_files" | grep -v '^$' | sort -u)
-
-echo "Found remote RPMs:"
-echo "$remote_files"
+    echo "Found remote RPMs:"
+    echo "$remote_files"
+fi
 
 # Get list of local RPMs
 echo "2. Getting list of local RPMs..."
@@ -84,6 +91,11 @@ echo "$local_files" > /tmp/local_rpms.txt
 echo "3. Syncing RPMs..."
 # Download missing RPMs from remote
 while IFS= read -r remote_file; do
+    # Skip if filename is empty
+    if [ -z "$remote_file" ]; then
+        continue
+    fi
+    
     if ! grep -q "^${remote_file}$" /tmp/local_rpms.txt; then
         echo "Downloading: $remote_file"
         
