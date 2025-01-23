@@ -1,9 +1,10 @@
 #!/bin/bash
 
-# Variables
-TOKEN="glpat-eX-vwr3j7nPZmtYohnXF" # Replace this with your token
-PROJECT_ID="66226575" # GitLab project ID
-PACKAGE_ID="34287433"
+# Variables will be replaced by CI job
+TOKEN="glpat-eX-vwr3j7nPZmtYohnXF"
+PROJECT_ID="66226575"
+PACKAGE_NAME="rpm"  # The package name in GitLab package registry
+RPM_DIR="./rpms"
 
 # Set API URL based on environment
 if [ -z "$CI_API_V4_URL" ]; then
@@ -21,9 +22,27 @@ else
     AUTH_HEADER="JOB-TOKEN: $CI_JOB_TOKEN"
 fi
 
-echo "Fetching list of RPMs from GitLab package registry..."
+# Ensure RPM directory exists
+if [ ! -d "$RPM_DIR" ]; then
+    echo "Creating RPM directory: $RPM_DIR"
+    mkdir -p "$RPM_DIR"
+fi
 
-# Get package files from the package registry with pagination
+echo "1. Getting package ID for $PACKAGE_NAME..."
+# Get the package ID dynamically
+PACKAGE_ID=$(curl --silent --header "$AUTH_HEADER" \
+    "$API_URL/projects/${PROJECT_ID}/packages?package_name=${PACKAGE_NAME}" | \
+    grep -o '"id":[0-9]*' | head -1 | cut -d':' -f2)
+
+if [ -z "$PACKAGE_ID" ]; then
+    echo "Error: Could not find package ID for $PACKAGE_NAME"
+    exit 1
+fi
+
+echo "Found package ID: $PACKAGE_ID"
+
+echo "2. Getting list of remote RPMs..."
+# Get package versions from the package registry with pagination
 page=1
 remote_files=""
 while true; do
@@ -46,12 +65,8 @@ while true; do
     ((page++))
 done
 
-# Remove empty lines and duplicates, then sort
+# Remove empty lines and duplicates
 remote_files=$(echo "$remote_files" | grep -v '^$' | sort -u)
 
-echo "Available RPM packages:"
-echo "----------------------"
+echo "Found remote RPMs:"
 echo "$remote_files"
-echo "----------------------"
-COUNT=$(echo "$remote_files" | grep -c "^")
-echo "Total RPMs: $COUNT" 

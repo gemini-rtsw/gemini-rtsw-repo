@@ -3,7 +3,7 @@
 # Variables will be replaced by CI job
 TOKEN="glpat-eX-vwr3j7nPZmtYohnXF"
 PROJECT_ID="66226575"
-PACKAGE_ID="34287433"
+PACKAGE_NAME="rpm"  # The package name in GitLab package registry
 RPM_DIR="./rpms"
 
 # Set API URL based on environment
@@ -28,7 +28,20 @@ if [ ! -d "$RPM_DIR" ]; then
     mkdir -p "$RPM_DIR"
 fi
 
-echo "1. Getting list of remote RPMs..."
+echo "1. Getting package ID for $PACKAGE_NAME..."
+# Get the package ID dynamically
+PACKAGE_ID=$(curl --silent --header "$AUTH_HEADER" \
+    "$API_URL/projects/${PROJECT_ID}/packages?package_name=${PACKAGE_NAME}" | \
+    grep -o '"id":[0-9]*' | head -1 | cut -d':' -f2)
+
+if [ -z "$PACKAGE_ID" ]; then
+    echo "Error: Could not find package ID for $PACKAGE_NAME"
+    exit 1
+fi
+
+echo "Found package ID: $PACKAGE_ID"
+
+echo "2. Getting list of remote RPMs..."
 # Get package versions from the package registry with pagination
 page=1
 remote_files=""
