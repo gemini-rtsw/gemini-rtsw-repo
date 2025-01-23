@@ -142,37 +142,41 @@ echo "4. Cleaning old repository metadata..."
 rm -rf "$RPM_DIR/repodata"
 
 echo "5. Generating repository metadata..."
-docker run --rm \
-    -v "$(pwd)/$RPM_DIR:/repo:Z" \
-    rockylinux:9 \
-    bash -c "set -x && \
-             dnf install -y createrepo_c && \
-             echo 'Contents of /repo:' && \
-             ls -la /repo && \
-             createrepo_c --verbose /repo"
+if [ "$IS_CI" = true ]; then
+    docker run --rm \
+        -v "$(pwd)/$RPM_DIR:/repo:Z" \
+        rockylinux:9 \
+        bash -c "set -x && \
+                 dnf install -y createrepo_c && \
+                 echo 'Contents of /repo:' && \
+                 ls -la /repo && \
+                 createrepo_c --verbose /repo"
 
-echo "6. Uploading metadata files..."
-# First, delete old repodata from GitLab
-echo "Deleting old repodata from GitLab..."
-curl --silent --header "$AUTH_HEADER" \
-    "$API_URL/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/repodata/repomd.xml" \
-    --output /dev/null
+    echo "6. Uploading metadata files..."
+    # First, delete old repodata from GitLab
+    echo "Deleting old repodata from GitLab..."
+    curl --silent --header "$AUTH_HEADER" \
+        "$API_URL/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/repodata/repomd.xml" \
+        --output /dev/null
 
-# Delete all repodata files in one go
-curl --silent --request DELETE --header "$AUTH_HEADER" \
-    "$API_URL/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/repodata"
+    # Delete all repodata files in one go
+    curl --silent --request DELETE --header "$AUTH_HEADER" \
+        "$API_URL/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/repodata"
 
-# Then upload new repodata
-echo "Uploading new repodata..."
-find "$RPM_DIR/repodata" -type f | while read -r file; do
-    relative_path=${file#"$RPM_DIR/"}
-    echo "Uploading: $relative_path"
-    curl --header "$AUTH_HEADER" \
-         --upload-file "$file" \
-         "$API_URL/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/$relative_path"
-done
+    # Then upload new repodata
+    echo "Uploading new repodata..."
+    find "$RPM_DIR/repodata" -type f | while read -r file; do
+        relative_path=${file#"$RPM_DIR/"}
+        echo "Uploading: $relative_path"
+        curl --header "$AUTH_HEADER" \
+             --upload-file "$file" \
+             "$API_URL/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/$relative_path"
+    done
 
-echo "Repository sync complete!"
+    echo "Repository sync complete!"
+else
+    echo "Not running in CI - skipping metadata generation and triggering pipeline instead..."
+fi
 
 # Only trigger pipeline if not running in CI
 if [ "$IS_CI" = false ]; then
