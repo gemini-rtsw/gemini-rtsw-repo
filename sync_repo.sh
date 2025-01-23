@@ -5,6 +5,22 @@ TOKEN="glpat-eX-vwr3j7nPZmtYohnXF"
 PROJECT_ID="66226575"
 PACKAGE_ID="34287433"
 RPM_DIR="./rpms"
+DELETE_REMOTE=false
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --delete-remote)
+            DELETE_REMOTE=true
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--delete-remote]"
+            exit 1
+            ;;
+    esac
+done
 
 # Set API URL based on environment
 if [ -z "$CI_API_V4_URL" ]; then
@@ -69,6 +85,19 @@ echo "$remote_files" > /tmp/remote_rpms.txt
 echo "$local_files" > /tmp/local_rpms.txt
 
 echo "3. Syncing RPMs..."
+# Delete remote RPMs that don't exist locally if --delete-remote flag is set
+if [ "$DELETE_REMOTE" = true ]; then
+    echo "Checking for remote RPMs to delete..."
+    while IFS= read -r remote_file; do
+        if ! grep -q "^${remote_file}$" /tmp/local_rpms.txt; then
+            echo "Deleting remote RPM: $remote_file"
+            curl --silent --request DELETE --header "$AUTH_HEADER" \
+                "$API_URL/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/$remote_file"
+            echo "Successfully deleted: $remote_file"
+        fi
+    done < /tmp/remote_rpms.txt
+fi
+
 # Download missing RPMs from remote
 while IFS= read -r remote_file; do
     if ! grep -q "^${remote_file}$" /tmp/local_rpms.txt; then
