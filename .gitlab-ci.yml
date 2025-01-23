@@ -1,7 +1,6 @@
 variables:
   REPO_PATH: "rpms"
   API_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}"
-  PACKAGE_ID: "34287433"
   DOCKER_IMAGE_NAME: "${CI_REGISTRY_IMAGE}/rocky8-packages"
 
 stages:
@@ -27,7 +26,6 @@ sync-repository:
       sed -i \
         -e "s|TOKEN=\".*\"|TOKEN=\"${CI_JOB_TOKEN}\"|" \
         -e "s|PROJECT_ID=\".*\"|PROJECT_ID=\"${CI_PROJECT_ID}\"|" \
-        -e "s|PACKAGE_ID=\".*\"|PACKAGE_ID=\"${PACKAGE_ID}\"|" \
         -e "s|https://gitlab.com/api/v4|${CI_API_V4_URL}|g" \
         sync_repo.sh
     
