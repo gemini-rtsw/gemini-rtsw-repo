@@ -4,9 +4,26 @@
 TOKEN="glpat-eX-vwr3j7nPZmtYohnXF" # Replace this with your token
 PROJECT_ID="66226575" # GitLab project ID
 
+# Parse command line options
+NO_PUSH=false
+while getopts "n-:" opt; do
+    case $opt in
+        n) NO_PUSH=true ;;
+        -)
+            case "${OPTARG}" in
+                no-push) NO_PUSH=true ;;
+                *) echo "Invalid option: --${OPTARG}" >&2; exit 1 ;;
+            esac ;;
+        ?) echo "Invalid option: -${OPTARG}" >&2; exit 1 ;;
+    esac
+done
+shift $((OPTIND-1))
+
 # Check if an RPM file was provided as an argument
 if [ $# -ne 1 ]; then
-    echo "Usage: $0 <path-to-rpm-file>"
+    echo "Usage: $0 [-n|--no-push] <path-to-rpm-file>"
+    echo "Options:"
+    echo "  -n, --no-push    Skip triggering the repository sync pipeline"
     echo "Example: $0 ./my-package.rpm"
     exit 1
 fi
@@ -33,11 +50,14 @@ curl --header "PRIVATE-TOKEN: $TOKEN" \
 
 echo "Upload complete: $RPM_FILE"
 
-# Trigger pipeline via git push
-echo "Triggering repository sync pipeline via git push..."
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-git commit --allow-empty -m "Trigger sync after uploading $(basename "$RPM_FILE")"
-git push origin $CURRENT_BRANCH
-
-echo "Pipeline triggered via push"
+# Trigger pipeline via git push unless --no-push was specified
+if [ "$NO_PUSH" = false ]; then
+    echo "Triggering repository sync pipeline via git push..."
+    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    git commit --allow-empty -m "Trigger sync after uploading $(basename "$RPM_FILE")"
+    git push origin $CURRENT_BRANCH
+    echo "Pipeline triggered via push"
+else
+    echo "Skipping repository sync pipeline trigger (--no-push specified)"
+fi
 
