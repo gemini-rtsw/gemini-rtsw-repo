@@ -5,6 +5,27 @@ TOKEN="glpat-eX-vwr3j7nPZmtYohnXF"
 PROJECT_ID="66226575"
 PACKAGE_NAME="rpm"  # The package name in GitLab package registry
 
+# Parse command line options
+PROD=false
+while getopts "p-:" opt; do
+    case $opt in
+        p) PROD=true ;;
+        -)
+            case "${OPTARG}" in
+                prod) PROD=true ;;
+                *) echo "Invalid option: --${OPTARG}" >&2; exit 1 ;;
+            esac ;;
+        ?) echo "Invalid option: -${OPTARG}" >&2; exit 1 ;;
+    esac
+done
+shift $((OPTIND-1))
+
+# Set package name based on prod flag
+if [ "$PROD" = true ]; then
+    PACKAGE_NAME="prod"  # Change package name for prod repository
+    echo "Listing production repository packages"
+fi
+
 # Set API URL based on environment
 if [ -z "$CI_API_V4_URL" ]; then
     API_URL="https://gitlab.com/api/v4"

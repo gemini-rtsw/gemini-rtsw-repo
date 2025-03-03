@@ -6,6 +6,7 @@ This repository serves as an RPM package repository using GitLab's Package Regis
 
 - `upload_rpm.sh` - Script to upload a single RPM package
 - `sync_repo.sh` - Script to sync multiple RPMs and update metadata
+- `list_rpms.sh` - Script to list RPMs in the repository
 - `.gitlab-ci.yml` - CI configuration for repository maintenance
 - `rpms/` - Directory containing RPM packages
 
@@ -17,9 +18,15 @@ To upload a single RPM package:
 
     ./upload_rpm.sh path/to/your/package.rpm
 
+To upload to the production repository:
+
+    ./upload_rpm.sh -p path/to/your/package.rpm
+    # or
+    ./upload_rpm.sh --prod path/to/your/package.rpm
+
 This script will:
 - Validate the RPM file
-- Upload it to the GitLab Package Registry
+- Upload it to the GitLab Package Registry (default or production)
 - Trigger a CI pipeline to update repository metadata
 
 ### 2. Syncing Multiple RPMs
@@ -28,6 +35,12 @@ For bulk operations, use the sync script:
 
     ./sync_repo.sh
 
+To sync with the production repository:
+
+    ./sync_repo.sh -p
+    # or
+    ./sync_repo.sh --prod
+
 The sync script will:
 - Compare local RPMs in `rpms/` with remote repository
 - Download missing RPMs from remote
@@ -35,7 +48,19 @@ The sync script will:
 - Generate and upload repository metadata
 - Trigger a CI pipeline if not running in CI
 
-### 3. Automatic Repository Maintenance
+### 3. Listing RPMs
+
+To list RPMs in the repository:
+
+    ./list_rpms.sh
+
+To list RPMs in the production repository:
+
+    ./list_rpms.sh -p
+    # or
+    ./list_rpms.sh --prod
+
+### 4. Automatic Repository Maintenance
 
 The repository is automatically maintained by GitLab CI:
 
@@ -44,7 +69,21 @@ The repository is automatically maintained by GitLab CI:
 - Creates fresh repository metadata using createrepo_c
 - Uploads the metadata back to GitLab
 
-### 4. Using the Repository
+#### Triggering Repository Sync from GitLab Interface
+
+You can manually trigger repository sync from the GitLab interface:
+
+1. Go to the project's CI/CD > Pipelines section
+2. Click "Run pipeline"
+3. For the default repository, simply run the pipeline without variables
+4. For the production repository, add a variable:
+   - Key: `IS_PROD`
+   - Value: `true`
+5. Click "Run pipeline"
+
+This will execute the appropriate sync job based on the `IS_PROD` variable.
+
+### 5. Using the Repository
 
 To use this RPM repository in your system:
 
@@ -53,6 +92,14 @@ To use this RPM repository in your system:
     [gitlab-rpm-repo]
     name=GitLab RPM Repository
     baseurl=https://oauth2:YOUR_GITLAB_TOKEN@gitlab.com/api/v4/projects/66226575/packages/generic/rpm-repo/1.0/
+    enabled=1
+    gpgcheck=0
+
+For the production repository:
+
+    [gitlab-prod-repo]
+    name=GitLab Production RPM Repository
+    baseurl=https://oauth2:YOUR_GITLAB_TOKEN@gitlab.com/api/v4/projects/66226575/packages/generic/prod/1.0/
     enabled=1
     gpgcheck=0
 
@@ -81,5 +128,8 @@ Note: If you need PowerTools and EPEL repositories, install and enable them befo
 - Repository metadata is automatically updated after changes
 - CI pipelines ensure consistency between local and remote packages
 - Authentication is handled via GitLab tokens
+- Two separate repositories are available:
+  - Default repository: `rpm-repo/1.0`
+  - Production repository: `prod/1.0`
 
 

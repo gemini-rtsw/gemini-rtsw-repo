@@ -5,6 +5,29 @@ TOKEN="glpat-eX-vwr3j7nPZmtYohnXF"
 PROJECT_ID="66226575"
 PACKAGE_NAME="rpm"  # The package name in GitLab package registry
 RPM_DIR="./rpms"
+REPO_PATH="rpm-repo/1.0"  # Default repository path
+
+# Parse command line options
+PROD=false
+while getopts "p-:" opt; do
+    case $opt in
+        p) PROD=true ;;
+        -)
+            case "${OPTARG}" in
+                prod) PROD=true ;;
+                *) echo "Invalid option: --${OPTARG}" >&2; exit 1 ;;
+            esac ;;
+        ?) echo "Invalid option: -${OPTARG}" >&2; exit 1 ;;
+    esac
+done
+shift $((OPTIND-1))
+
+# Set repository path based on prod flag
+if [ "$PROD" = true ]; then
+    REPO_PATH="prod/1.0"
+    PACKAGE_NAME="prod"  # Change package name for prod repository
+    echo "Using production repository"
+fi
 
 # Set API URL based on environment
 if [ -z "$CI_API_V4_URL" ]; then
@@ -102,7 +125,7 @@ while IFS= read -r remote_file; do
         # Download using direct package file URL
         curl --silent --location --header "$AUTH_HEADER" \
             --output "$RPM_DIR/$remote_file" \
-            "$API_URL/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/$remote_file"
+            "$API_URL/projects/${PROJECT_ID}/packages/generic/$REPO_PATH/$remote_file"
         
         # Verify download
         if [ ! -s "$RPM_DIR/$remote_file" ]; then
@@ -127,7 +150,7 @@ while IFS= read -r local_file; do
         if file "$RPM_DIR/$local_file" | grep -q "RPM"; then
             curl --silent --header "$AUTH_HEADER" \
                 --upload-file "$RPM_DIR/$local_file" \
-                "$API_URL/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/$local_file"
+                "$API_URL/projects/${PROJECT_ID}/packages/generic/$REPO_PATH/$local_file"
             echo "Successfully uploaded: $local_file"
         else
             echo "Warning: Local file is not a valid RPM, skipping: $local_file"
@@ -156,12 +179,12 @@ if [ "$IS_CI" = true ]; then
     # First, delete old repodata from GitLab
     echo "Deleting old repodata from GitLab..."
     curl --silent --header "$AUTH_HEADER" \
-        "$API_URL/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/repodata/repomd.xml" \
+        "$API_URL/projects/${PROJECT_ID}/packages/generic/$REPO_PATH/repodata/repomd.xml" \
         --output /dev/null
 
     # Delete all repodata files in one go
     curl --silent --request DELETE --header "$AUTH_HEADER" \
-        "$API_URL/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/repodata"
+        "$API_URL/projects/${PROJECT_ID}/packages/generic/$REPO_PATH/repodata"
 
     # Then upload new repodata
     echo "Uploading new repodata..."
@@ -170,7 +193,7 @@ if [ "$IS_CI" = true ]; then
         echo "Uploading: $relative_path"
         curl --header "$AUTH_HEADER" \
              --upload-file "$file" \
-             "$API_URL/projects/${PROJECT_ID}/packages/generic/rpm-repo/1.0/$relative_path"
+             "$API_URL/projects/${PROJECT_ID}/packages/generic/$REPO_PATH/$relative_path"
     done
 
     echo "Repository sync complete!"
@@ -182,7 +205,7 @@ fi
 if [ "$IS_CI" = false ]; then
     echo "Triggering repository sync pipeline via git push..."
     CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-    git commit --allow-empty -m "Trigger sync after repository update"
+    git commit --allow-empty -m "Trigger sync after repository update for $REPO_PATH"
     git push origin $CURRENT_BRANCH
     echo "Pipeline triggered via push"
 fi 
