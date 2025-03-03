@@ -7,7 +7,7 @@ stages:
   - sync
   - build
 
-# First stage to sync the default repository
+# Repository sync job - can be configured to sync either default or production repository
 sync-repository:
   stage: sync
   image: docker:20.10.16
@@ -44,13 +44,6 @@ sync-repository:
       when: always
     - when: manual
 
-# Sync production repository
-sync-prod-repository:
-  extends: sync-repository
-  variables:
-    IS_PROD: "true"
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "trigger" && $PACKAGE_EVENT == "push_prod"'
-      when: always
-    - when: manual
+# Note: To sync the production repository, run this job with IS_PROD=true variable
+# Go to CI/CD > Pipelines > Run Pipeline and add the variable IS_PROD with value "true"
 

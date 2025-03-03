@@ -125,7 +125,7 @@ You can manually trigger repository sync from the GitLab interface:
    - Value: `true`
 5. Click "Run pipeline"
 
-This will execute the appropriate sync job based on the `IS_PROD` variable.
+This will execute the sync job with the appropriate configuration based on the `IS_PROD` variable.
 
 ### 7. Using the Repository
 
