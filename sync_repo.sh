@@ -205,7 +205,17 @@ fi
 if [ "$IS_CI" = false ]; then
     echo "Triggering repository sync pipeline via git push..."
     CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-    git commit --allow-empty -m "Trigger sync after repository update for $REPO_PATH"
+    
+    # Add commit message with metadata about which repository was updated
+    COMMIT_MSG="Trigger sync after repository update for $REPO_PATH"
+    
+    # If using production repository, add a special tag to the commit message
+    if [ "$PROD" = true ]; then
+        COMMIT_MSG="[PROD_SYNC] $COMMIT_MSG"
+        echo "Adding production flag to commit message to ensure CI regenerates production repository"
+    fi
+    
+    git commit --allow-empty -m "$COMMIT_MSG"
     git push origin $CURRENT_BRANCH
     echo "Pipeline triggered via push"
 fi 

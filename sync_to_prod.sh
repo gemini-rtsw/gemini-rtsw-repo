@@ -185,7 +185,7 @@ rm -rf "$TEMP_DIR"
 if [ "$NO_PUSH" = false ]; then
     echo "8. Triggering repository sync pipeline via git push..."
     CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-    git commit --allow-empty -m "Trigger sync after promoting RPMs to production"
+    git commit --allow-empty -m "[PROD_SYNC] Trigger sync after promoting RPMs to production"
     git push origin $CURRENT_BRANCH
     echo "Pipeline triggered via push"
 else

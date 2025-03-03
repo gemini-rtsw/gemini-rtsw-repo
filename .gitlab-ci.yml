@@ -17,6 +17,13 @@ sync-repository:
     # Install required tools
     - apk add --no-cache curl jq bash file
     
+    # Check if commit message contains [PROD_SYNC] tag and set IS_PROD accordingly
+    - |
+      if git log -1 --pretty=%B | grep -q "\[PROD_SYNC\]"; then
+        echo "Production sync detected in commit message"
+        export IS_PROD="true"
+      fi
+    
   script:
     # Create repo directory
     - mkdir -p $REPO_PATH

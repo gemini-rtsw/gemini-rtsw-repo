@@ -47,8 +47,8 @@ The sync script will:
 - Compare local RPMs in `rpms/` with remote repository
 - Download missing RPMs from remote
 - Upload new local RPMs
-- Generate and upload repository metadata
-- Trigger a CI pipeline if not running in CI
+- When run locally, it triggers a CI pipeline that will regenerate and upload repository metadata
+- When run with the production flag (-p/--prod), it ensures the CI pipeline regenerates the production repository metadata
 
 ### 3. Listing RPMs
 
@@ -176,5 +176,7 @@ Note: If you need PowerTools and EPEL repositories, install and enable them befo
   - Default repository: `rpm-repo/1.0`
   - Production repository: `prod/1.0`
 - **Important**: After creating a new repository, you must run `sync_repo.sh` manually once to initialize the repository data structure.
+- When running `sync_repo.sh -p` locally, it will trigger a CI pipeline that regenerates the production repository metadata.
+- If repository metadata is not being regenerated for production, ensure you're using the latest version of the scripts that include the [PROD_SYNC] tag in commit messages.
 
 
