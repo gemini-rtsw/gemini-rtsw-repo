@@ -175,5 +175,6 @@ Note: If you need PowerTools and EPEL repositories, install and enable them befo
 - Two separate repositories are available:
   - Default repository: `rpm-repo/1.0`
   - Production repository: `prod/1.0`
+- **Important**: After creating a new repository, you must run `sync_repo.sh` manually once to initialize the repository data structure.
 
 
