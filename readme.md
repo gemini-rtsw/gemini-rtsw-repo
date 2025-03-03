@@ -7,6 +7,8 @@ This repository serves as an RPM package repository using GitLab's Package Regis
 - `upload_rpm.sh` - Script to upload a single RPM package
 - `sync_repo.sh` - Script to sync multiple RPMs and update metadata
 - `list_rpms.sh` - Script to list RPMs in the repository
+- `sync_to_prod.sh` - Script to sync all RPMs from default to production repository
+- `backup_repos.sh` - Script to download all RPMs from both repositories for backup
 - `.gitlab-ci.yml` - CI configuration for repository maintenance
 - `rpms/` - Directory containing RPM packages
 
@@ -60,7 +62,49 @@ To list RPMs in the production repository:
     # or
     ./list_rpms.sh --prod
 
-### 4. Automatic Repository Maintenance
+### 4. Promoting RPMs to Production
+
+To promote all RPMs from the default repository to the production repository:
+
+    ./sync_to_prod.sh
+
+This script will:
+- Download all RPMs from the default repository (rpm-repo/1.0)
+- Upload them to the production repository (prod/1.0)
+- Skip RPMs that already exist in production
+- Trigger a CI pipeline to update repository metadata
+
+To skip triggering the pipeline:
+
+    ./sync_to_prod.sh -n
+    # or
+    ./sync_to_prod.sh --no-push
+
+### 5. Backing Up Repositories
+
+To create a backup of all RPMs from both default and production repositories:
+
+    ./backup_repos.sh
+
+This script will:
+- Download all RPMs from the default repository
+- Download all RPMs from the production repository
+- Download repository metadata
+- Create a manifest file with timestamp and counts
+- Store everything in the `./rpm_backup` directory
+
+To compress the backup into a tar.gz archive:
+
+    ./backup_repos.sh -c
+    # or
+    ./backup_repos.sh --compress
+
+The backup will be organized as follows:
+- `./rpm_backup/default/` - Default repository RPMs and metadata
+- `./rpm_backup/prod/` - Production repository RPMs and metadata
+- `./rpm_backup/manifest.txt` - Backup information and statistics
+
+### 6. Automatic Repository Maintenance
 
 The repository is automatically maintained by GitLab CI:
 
@@ -83,7 +127,7 @@ You can manually trigger repository sync from the GitLab interface:
 
 This will execute the appropriate sync job based on the `IS_PROD` variable.
 
-### 5. Using the Repository
+### 7. Using the Repository
 
 To use this RPM repository in your system:
 
