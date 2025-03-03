@@ -179,4 +179,43 @@ Note: If you need PowerTools and EPEL repositories, install and enable them befo
 - When running `sync_repo.sh -p` locally, it will trigger a CI pipeline that regenerates the production repository metadata.
 - If repository metadata is not being regenerated for production, ensure you're using the latest version of the scripts that include the [PROD_SYNC] tag in commit messages.
 
+## Rebuilding Repository Data
+
+If you need to rebuild repository data (for example, if metadata becomes corrupted or out of sync), follow these steps:
+
+### Rebuilding Default Repository Data
+
+1. Run the sync script locally:
+   ```
+   ./sync_repo.sh
+   ```
+   This will trigger a CI pipeline that regenerates the default repository metadata.
+
+2. Alternatively, manually trigger a CI pipeline:
+   - Go to GitLab > CI/CD > Pipelines
+   - Click "Run pipeline"
+   - Run without any additional variables
+
+### Rebuilding Production Repository Data
+
+1. Run the sync script with the production flag:
+   ```
+   ./sync_repo.sh -p
+   ```
+   or
+   ```
+   ./sync_repo.sh --prod
+   ```
+   This will trigger a CI pipeline that regenerates the production repository metadata.
+
+2. Alternatively, manually trigger a CI pipeline with the IS_PROD variable:
+   - Go to GitLab > CI/CD > Pipelines
+   - Click "Run pipeline"
+   - Add a variable:
+     - Key: `IS_PROD`
+     - Value: `true`
+   - Click "Run pipeline"
+
+The CI pipeline will download all RPMs, regenerate repository metadata using createrepo_c, and upload the metadata back to GitLab.
+
 
