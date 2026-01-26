@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # Variables
-TOKEN="glpat-eX-vwr3j7nPZmtYohnXF" # Replace this with your token
+#TOKEN="glpat-eX-vwr3j7nPZmtYohnXF" # Replace this with your token
+TOKEN=$REGISTRY_TOKEN
 PROJECT_ID="66226575" # GitLab project ID
 
 # Parse command line options
