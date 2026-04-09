@@ -191,7 +191,8 @@ if [ "$IS_CI" = true ]; then
             fi
 
             # Extract file IDs for repodata files only (using jq for safe JSON parsing)
-            page_ids=$(echo "$response" | jq -r '.[] | select(.file_name | test("^repodata/")) | .id')
+            # Note: GitLab URL-encodes the slash, so files appear as "repodata%2F..." or "repodata/..."
+            page_ids=$(echo "$response" | jq -r '.[] | select(.file_name | test("^repodata[/%]")) | .id')
             if [ -n "$page_ids" ]; then
                 old_repodata_file_ids="${old_repodata_file_ids}${page_ids}"$'\n'
             fi
