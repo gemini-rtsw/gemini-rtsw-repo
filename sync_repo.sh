@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # Variables will be replaced by CI job
-#TOKEN="glpat-eX-vwr3j7nPZmtYohnXF"
 TOKEN=$REGISTRY_TOKEN
 PROJECT_ID="66226575"
 PACKAGE_NAME="rpm"  # The package name in GitLab package registry
