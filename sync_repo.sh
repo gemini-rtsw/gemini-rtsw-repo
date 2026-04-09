@@ -177,25 +177,81 @@ if [ "$IS_CI" = true ]; then
                  createrepo_c --verbose /repo"
 
     echo "6. Uploading metadata files..."
-    # First, delete old repodata from GitLab
-    echo "Deleting old repodata from GitLab..."
-    curl --silent --header "$AUTH_HEADER" \
-        "$API_URL/projects/${PROJECT_ID}/packages/generic/$REPO_PATH/repodata/repomd.xml" \
-        --output /dev/null
 
-    # Delete all repodata files in one go
-    curl --silent --request DELETE --header "$AUTH_HEADER" \
-        "$API_URL/projects/${PROJECT_ID}/packages/generic/$REPO_PATH/repodata"
+    # Collect old repodata file IDs BEFORE uploading new ones
+    echo "Collecting old repodata file IDs from GitLab..."
+    old_repodata_file_ids=""
+    if [ -n "$PACKAGE_ID" ]; then
+        page=1
+        while true; do
+            response=$(curl --silent --header "$AUTH_HEADER" \
+                "$API_URL/projects/${PROJECT_ID}/packages/${PACKAGE_ID}/package_files?per_page=100&page=${page}")
 
-    # Then upload new repodata
+            if [ -z "$response" ] || [ "$response" = "[]" ]; then
+                break
+            fi
+
+            # Extract file IDs for repodata files only (using jq for safe JSON parsing)
+            page_ids=$(echo "$response" | jq -r '.[] | select(.file_name | test("^repodata/")) | .id')
+            if [ -n "$page_ids" ]; then
+                old_repodata_file_ids="${old_repodata_file_ids}${page_ids}"$'\n'
+            fi
+
+            # Check if there are more pages
+            page_count=$(echo "$response" | jq '. | length')
+            if [ "$page_count" -lt 100 ]; then
+                break
+            fi
+
+            ((page++))
+        done
+        old_repodata_file_ids=$(echo "$old_repodata_file_ids" | grep -v '^$')
+        if [ -n "$old_repodata_file_ids" ]; then
+            echo "Found $(echo "$old_repodata_file_ids" | wc -l | tr -d ' ') old repodata files to clean up after upload"
+        else
+            echo "No old repodata files found"
+        fi
+    fi
+
+    # Upload new repodata first (safe: old metadata still works until we delete it)
     echo "Uploading new repodata..."
+    upload_failed=false
     find "$RPM_DIR/repodata" -type f | while read -r file; do
         relative_path=${file#"$RPM_DIR/"}
         echo "Uploading: $relative_path"
-        curl --header "$AUTH_HEADER" \
+        http_code=$(curl --silent --output /dev/null --write-out "%{http_code}" \
+             --header "$AUTH_HEADER" \
              --upload-file "$file" \
-             "$API_URL/projects/${PROJECT_ID}/packages/generic/$REPO_PATH/$relative_path"
+             "$API_URL/projects/${PROJECT_ID}/packages/generic/$REPO_PATH/$relative_path")
+        if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+            echo "ERROR: Failed to upload $relative_path (HTTP $http_code)"
+            echo "true" > /tmp/upload_failed
+        else
+            echo "Uploaded $relative_path (HTTP $http_code)"
+        fi
     done
+
+    # Check if any uploads failed
+    if [ -f /tmp/upload_failed ]; then
+        rm -f /tmp/upload_failed
+        echo "ERROR: One or more repodata uploads failed. Keeping old repodata intact."
+        echo "The repository may have duplicate metadata. Re-run the pipeline to retry."
+        exit 1
+    fi
+
+    # Delete old repodata files now that new ones are confirmed uploaded
+    if [ -n "$old_repodata_file_ids" ]; then
+        echo "Deleting old repodata files from GitLab..."
+        while IFS= read -r file_id; do
+            if [ -z "$file_id" ]; then
+                continue
+            fi
+            echo "Deleting old repodata file ID: $file_id"
+            curl --silent --request DELETE --header "$AUTH_HEADER" \
+                "$API_URL/projects/${PROJECT_ID}/packages/${PACKAGE_ID}/package_files/${file_id}"
+        done <<< "$old_repodata_file_ids"
+        echo "Old repodata cleanup complete"
+    fi
 
     echo "Repository sync complete!"
 else
