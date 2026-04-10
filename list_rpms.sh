@@ -3,7 +3,7 @@
 # Lists RPMs in the GHCR RPM repo container
 
 RPM_REPO_IMAGE="ghcr.io/gemini-rtsw/rpm-repo"
-TAG="${1:-latest}"
+TAG="latest"
 
 echo "Pulling RPM repo container ($TAG)..."
 if ! docker pull "$RPM_REPO_IMAGE:$TAG" 2>/dev/null; then

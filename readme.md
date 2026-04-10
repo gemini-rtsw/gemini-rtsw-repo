@@ -17,16 +17,11 @@ Point dnf at it:
     dnf makecache --refresh
     dnf install PACKAGE_NAME
 
-In a Dockerfile (with the repo container on a Docker network named `rpm-net`):
+In a Dockerfile (with the repo container on a Docker network):
 
     ARG RPM_REPO_URL=http://rpm-repo:8080/rpm-repo/
     RUN echo -e "[rpm-repo]\nname=RPM Repo\nbaseurl=${RPM_REPO_URL}\nenabled=1\ngpgcheck=0" \
         > /etc/yum.repos.d/rpm-repo.repo
-
-Use different tags for different environments:
-
-    ghcr.io/gemini-rtsw/rpm-repo:latest   # development
-    ghcr.io/gemini-rtsw/rpm-repo:prod     # production
 
 ## Scripts
 
@@ -35,8 +30,6 @@ Use different tags for different environments:
 | `upload_rpm.sh` | Stage RPMs and trigger a pipeline to add them to the container |
 | `sync_repo.sh` | Sync RPMs between local `rpms/` directory and the container |
 | `list_rpms.sh` | List RPMs in the container |
-| `sync_to_prod.sh` | Tag a container image as `prod` |
-| `backup_repos.sh` | Download all RPMs from a container for backup |
 
 ### Upload RPMs
 
@@ -46,23 +39,11 @@ Use different tags for different environments:
 
 ### Sync repository
 
-    ./sync_repo.sh              # sync with :latest
-    ./sync_repo.sh some-tag     # sync with a specific tag
+    ./sync_repo.sh
 
 ### List RPMs
 
-    ./list_rpms.sh              # list :latest
-    ./list_rpms.sh prod         # list :prod
-
-### Promote to production
-
-    ./sync_to_prod.sh           # tag :latest as :prod
-    ./sync_to_prod.sh v1.2      # tag :v1.2 as :prod
-
-### Backup
-
-    ./backup_repos.sh           # backup :latest
-    ./backup_repos.sh prod      # backup :prod
+    ./list_rpms.sh
 
 ## How it works
 

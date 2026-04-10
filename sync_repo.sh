@@ -7,7 +7,7 @@
 # Locally: pulls the container, syncs RPMs, triggers pipeline
 
 RPM_REPO_IMAGE="ghcr.io/gemini-rtsw/rpm-repo"
-TAG="${1:-latest}"
+TAG="latest"
 RPM_DIR="./rpms"
 
 # Ensure RPM directory exists
