@@ -50,3 +50,11 @@ In a Dockerfile (with the repo container on a Docker network):
 
 - Docker
 - GHCR authentication (`docker login ghcr.io`)
+
+## GitHub package access
+
+For other repos in the org to pull the `ghcr.io/gemini-rtsw/rpm-repo` container (e.g. in their CI), the package must be configured to allow access:
+
+1. Go to the package settings: **github.com/orgs/gemini-rtsw/packages/container/rpm-repo/settings**
+2. Under **Manage Actions access**, add each repo that needs access
+3. Set the role to **Read** for repos that only pull, or **Write** for repos whose CI pushes new RPMs via `sync_repo.sh`
