@@ -1,14 +1,17 @@
 # Switch to Rocky 8 to match the RPM version
 FROM rockylinux:8
 
-# Create repository configuration with authentication
+# Copy RPMs from the GHCR RPM repo container
+COPY --from=ghcr.io/gemini-rtsw/rpm-repo:latest /rpm-repo /tmp/rpm-repo
+
+# Create a local yum repo from the container RPMs
 RUN echo $'\n\
-[gitlab-rpm-repo]\n\
-name=GitLab RPM Repository\n\
-baseurl=https://oauth2:glpat-eX-vwr3j7nPZmtYohnXF@gitlab.com/api/v4/projects/66226575/packages/generic/rpm-repo/1.0/\n\
+[local-rpm-repo]\n\
+name=Local RPM Repository\n\
+baseurl=file:///tmp/rpm-repo/\n\
 enabled=1\n\
 gpgcheck=0\n\
-' > /etc/yum.repos.d/gitlab-rpm-repo.repo
+' > /etc/yum.repos.d/local-rpm-repo.repo
 
 # Enable PowerTools and EPEL
 RUN dnf install -y epel-release && \
@@ -19,7 +22,7 @@ RUN dnf install -y epel-release && \
 RUN dnf makecache --refresh && \
     dnf install -y gcc-c++ && \
     dnf install -y conserver conserver-client && \
-    dnf install -y --nobest --allowerasing $(dnf list available --repo gitlab-rpm-repo -q | grep -v "Available Packages" | cut -f1 -d' ')
+    dnf install -y --nobest --allowerasing $(dnf list available --repo local-rpm-repo -q | grep -v "Available Packages" | cut -f1 -d' ')
 
 # Verify installation
 CMD rpm -qa

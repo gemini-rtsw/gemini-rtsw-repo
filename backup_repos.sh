@@ -1,9 +1,8 @@
 #!/bin/bash
 
-# Downloads all RPMs from both default and production repositories on gh-pages for backup
+# Downloads all RPMs from both default and production GHCR containers for backup
 
-DEFAULT_REPO="rpm-repo"
-PROD_REPO="prod"
+RPM_REPO_IMAGE="ghcr.io/gemini-rtsw/rpm-repo"
 BACKUP_DIR="./rpm_backup"
 DEFAULT_BACKUP_DIR="$BACKUP_DIR/default"
 PROD_BACKUP_DIR="$BACKUP_DIR/prod"
@@ -24,67 +23,41 @@ while getopts "c-:" opt; do
 done
 shift $((OPTIND-1))
 
-# Clone gh-pages into temp directory
-TEMP_DIR=$(mktemp -d)
-REPO_URL=$(git remote get-url github 2>/dev/null || git remote get-url origin)
-
-echo "Starting repository backup at $TIMESTAMP"
-
-echo "1. Cloning gh-pages branch..."
-if ! git clone --branch gh-pages --single-branch "$REPO_URL" "$TEMP_DIR" 2>/dev/null; then
-    echo "No gh-pages branch found - nothing to backup"
-    rm -rf "$TEMP_DIR"
-    exit 1
-fi
-
 # Create backup directories
 mkdir -p "$DEFAULT_BACKUP_DIR"
 mkdir -p "$PROD_BACKUP_DIR"
 
+echo "Starting repository backup at $TIMESTAMP"
+
 # Function to backup a repository
 backup_repository() {
     local repo_name=$1
-    local repo_dir=$2
+    local tag=$2
     local backup_dir=$3
 
     echo "Backing up $repo_name repository..."
 
-    local files
-    files=$(find "$TEMP_DIR/$repo_dir" -maxdepth 1 -type f -name "*.rpm" 2>/dev/null)
-
-    if [ -z "$files" ]; then
-        echo "No RPMs found in $repo_name repository - nothing to backup"
+    if ! docker pull "$RPM_REPO_IMAGE:$tag" 2>/dev/null; then
+        echo "No $repo_name repository found - nothing to backup"
         return
     fi
 
+    CID=$(docker create "$RPM_REPO_IMAGE:$tag")
+    docker cp "$CID:/rpm-repo/." "$backup_dir/" 2>/dev/null || true
+    docker rm "$CID" > /dev/null
+
     local count
-    count=$(echo "$files" | wc -l | tr -d ' ')
-    echo "Found $count RPMs in $repo_name repository"
-
-    echo "Downloading RPMs from $repo_name repository..."
-    for rpm_file in $files; do
-        BASENAME=$(basename "$rpm_file")
-        cp "$rpm_file" "$backup_dir/$BASENAME"
-        echo "Backed up: $BASENAME"
-    done
-
-    # Also backup repodata if it exists
-    if [ -d "$TEMP_DIR/$repo_dir/repodata" ]; then
-        echo "Backing up repository metadata..."
-        cp -r "$TEMP_DIR/$repo_dir/repodata" "$backup_dir/repodata"
-    fi
+    count=$(find "$backup_dir" -maxdepth 1 -name "*.rpm" 2>/dev/null | wc -l | tr -d ' ')
+    echo "Backed up $count RPMs from $repo_name repository"
 
     echo "$repo_name repository backup complete"
 }
 
 # Download default repository
-backup_repository "default" "$DEFAULT_REPO" "$DEFAULT_BACKUP_DIR"
+backup_repository "default" "latest" "$DEFAULT_BACKUP_DIR"
 
 # Download production repository
-backup_repository "production" "$PROD_REPO" "$PROD_BACKUP_DIR"
-
-# Cleanup temp dir
-rm -rf "$TEMP_DIR"
+backup_repository "production" "prod" "$PROD_BACKUP_DIR"
 
 # Create a manifest file with timestamp and counts
 echo "Creating backup manifest..."

@@ -11,80 +11,86 @@ on:
         default: 'false'
         type: boolean
 
+env:
+  REGISTRY: ghcr.io
+  RPM_REPO_IMAGE: ghcr.io/gemini-rtsw/rpm-repo
+
 jobs:
   sync-repository:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pages: write
+      contents: read
+      packages: write
     steps:
       - name: Checkout source branch
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Install tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y createrepo-c rpm jq
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Determine repo type
         id: repo-type
         run: |
           IS_PROD="false"
-          # Check workflow_dispatch input
           if [ "${{ github.event.inputs.is_prod }}" = "true" ]; then
             IS_PROD="true"
           fi
-          # Check commit message for [PROD_SYNC] tag
           if git log -1 --pretty=%B | grep -q "\[PROD_SYNC\]"; then
             IS_PROD="true"
           fi
           echo "is_prod=$IS_PROD" >> "$GITHUB_OUTPUT"
           if [ "$IS_PROD" = "true" ]; then
-            echo "repo_dir=prod" >> "$GITHUB_OUTPUT"
+            echo "tag=prod" >> "$GITHUB_OUTPUT"
           else
-            echo "repo_dir=rpm-repo" >> "$GITHUB_OUTPUT"
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout gh-pages branch
-        uses: actions/checkout@v4
-        with:
-          ref: gh-pages
-          path: gh-pages
-
-      - name: Sync RPMs to gh-pages
+      - name: Pull existing RPM repo container
         run: |
-          REPO_DIR="${{ steps.repo-type.outputs.repo_dir }}"
-          mkdir -p "gh-pages/$REPO_DIR"
+          TAG="${{ steps.repo-type.outputs.tag }}"
+          mkdir -p rpm-repo
 
-          # Copy any RPMs from source branch rpms/ directory that aren't already in gh-pages
+          if docker pull "$RPM_REPO_IMAGE:$TAG" 2>/dev/null; then
+            echo "Extracting existing RPMs from container..."
+            CID=$(docker create "$RPM_REPO_IMAGE:$TAG")
+            docker cp "$CID:/rpm-repo/." "rpm-repo/" 2>/dev/null || true
+            docker rm "$CID"
+            rm -rf "rpm-repo/repodata"
+            echo "Existing RPMs:"
+            ls -1 rpm-repo/*.rpm 2>/dev/null || echo "(none)"
+          else
+            echo "No existing container image found, starting fresh"
+          fi
+
+      - name: Add new RPMs from source
+        run: |
           if [ -d "rpms" ]; then
             for rpm in rpms/*.rpm; do
               [ -f "$rpm" ] || continue
               BASENAME=$(basename "$rpm")
-              if [ ! -f "gh-pages/$REPO_DIR/$BASENAME" ]; then
+              if [ ! -f "rpm-repo/$BASENAME" ]; then
                 echo "Adding new RPM: $BASENAME"
-                cp "$rpm" "gh-pages/$REPO_DIR/"
+                cp "$rpm" "rpm-repo/"
+              else
+                echo "Already exists: $BASENAME"
               fi
             done
           fi
 
-      - name: Generate repository metadata
+      - name: Build and push RPM repo container
         run: |
-          REPO_DIR="${{ steps.repo-type.outputs.repo_dir }}"
-          rm -rf "gh-pages/$REPO_DIR/repodata"
-          createrepo_c "gh-pages/$REPO_DIR"
+          TAG="${{ steps.repo-type.outputs.tag }}"
 
-      - name: Deploy to gh-pages
-        run: |
-          cd gh-pages
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No changes to deploy"
-          else
-            git commit -m "Update RPM repository (${{ steps.repo-type.outputs.repo_dir }})"
-            git push origin gh-pages
-          fi
+          echo "RPMs to include:"
+          ls -lh rpm-repo/*.rpm 2>/dev/null || echo "(none)"
+
+          # Build using the repo's Dockerfile.rpm-repo
+          # (runs createrepo_c inside the build)
+          docker build -f Dockerfile.rpm-repo -t "$RPM_REPO_IMAGE:$TAG" .
+          docker push "$RPM_REPO_IMAGE:$TAG"
+
+          echo "Pushed $RPM_REPO_IMAGE:$TAG"

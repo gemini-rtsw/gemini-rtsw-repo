@@ -1,7 +1,10 @@
 #!/bin/bash
 
-# Uploads RPM files to the gh-pages branch RPM repository
+# Uploads RPM files to the GHCR RPM repo container.
+# Copies RPMs into the local rpms/ directory, then triggers the pipeline
+# which rebuilds the container with the new RPMs included.
 
+RPM_DIR="./rpms"
 REPO_DIR="rpm-repo"
 
 # Parse command line options
@@ -39,25 +42,7 @@ if [ $# -lt 1 ]; then
     exit 1
 fi
 
-# Clone gh-pages into temp directory
-TEMP_DIR=$(mktemp -d)
-REPO_URL=$(git remote get-url github 2>/dev/null || git remote get-url origin)
-
-echo "Cloning gh-pages branch..."
-if ! git clone --branch gh-pages --single-branch "$REPO_URL" "$TEMP_DIR" 2>/dev/null; then
-    echo "gh-pages branch doesn't exist yet - creating it"
-    git clone "$REPO_URL" "$TEMP_DIR"
-    cd "$TEMP_DIR"
-    git checkout --orphan gh-pages
-    git rm -rf . 2>/dev/null || true
-    echo "# RPM Repository" > README.md
-    git add README.md
-    git commit -m "Initialize gh-pages branch"
-    git push origin gh-pages
-    cd -
-fi
-
-mkdir -p "$TEMP_DIR/$REPO_DIR"
+mkdir -p "$RPM_DIR"
 
 uploaded_files=()
 
@@ -73,28 +58,16 @@ for RPM_FILE in "$@"; do
     fi
 
     BASENAME=$(basename "$RPM_FILE")
-    echo "Uploading $BASENAME to $REPO_DIR repository..."
-    cp "$RPM_FILE" "$TEMP_DIR/$REPO_DIR/$BASENAME"
-    echo "Upload complete: $BASENAME"
+    echo "Staging $BASENAME for upload..."
+    cp "$RPM_FILE" "$RPM_DIR/$BASENAME"
+    echo "Staged: $BASENAME"
     uploaded_files+=("$BASENAME")
 done
 
 if [ ${#uploaded_files[@]} -eq 0 ]; then
-    echo "No valid RPM files were uploaded."
-    rm -rf "$TEMP_DIR"
+    echo "No valid RPM files were staged."
     exit 1
 fi
-
-# Push to gh-pages
-echo "Pushing to gh-pages..."
-cd "$TEMP_DIR"
-git add -A
-git commit -m "Upload ${#uploaded_files[@]} RPM(s) to $REPO_DIR"
-git push origin gh-pages
-cd -
-
-# Cleanup
-rm -rf "$TEMP_DIR"
 
 # Trigger pipeline via git push unless --no-push was specified
 if [ "$NO_PUSH" = false ]; then
@@ -104,6 +77,9 @@ if [ "$NO_PUSH" = false ]; then
         COMMIT_MSG="Trigger sync after uploading ${uploaded_files[0]} to $REPO_DIR"
     else
         COMMIT_MSG="Trigger sync after uploading ${#uploaded_files[@]} RPMs to $REPO_DIR"
+    fi
+    if [ "$PROD" = true ]; then
+        COMMIT_MSG="[PROD_SYNC] $COMMIT_MSG"
     fi
     git commit --allow-empty -m "$COMMIT_MSG"
     git push github "$CURRENT_BRANCH" 2>/dev/null || git push origin "$CURRENT_BRANCH"

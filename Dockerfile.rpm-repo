@@ -1,0 +1,11 @@
+FROM rockylinux:9 AS builder
+
+RUN dnf install -y createrepo_c && dnf clean all
+
+COPY rpm-repo/ /build/rpm-repo/
+
+RUN createrepo_c /build/rpm-repo/
+
+FROM scratch
+
+COPY --from=builder /build/rpm-repo/ /rpm-repo/

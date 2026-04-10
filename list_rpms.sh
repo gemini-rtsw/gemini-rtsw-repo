@@ -1,8 +1,9 @@
 #!/bin/bash
 
-# Lists RPMs in the gh-pages branch RPM repository
+# Lists RPMs in the GHCR RPM repo container
 
-REPO_DIR="rpm-repo"
+RPM_REPO_IMAGE="ghcr.io/gemini-rtsw/rpm-repo"
+TAG="latest"
 
 # Parse command line options
 PROD=false
@@ -20,38 +21,28 @@ done
 shift $((OPTIND-1))
 
 if [ "$PROD" = true ]; then
-    REPO_DIR="prod"
+    TAG="prod"
     echo "Listing production repository packages"
 fi
 
-# Detect CI vs local
-if [ -n "$GITHUB_ACTIONS" ]; then
-    # In CI, gh-pages is checked out at ./gh-pages
-    GH_PAGES_DIR="./gh-pages"
-else
-    # Locally, clone gh-pages into temp dir
-    GH_PAGES_DIR=$(mktemp -d)
-    REPO_URL=$(git remote get-url github 2>/dev/null || git remote get-url origin)
-
-    echo "1. Fetching gh-pages branch..."
-    if ! git clone --branch gh-pages --single-branch "$REPO_URL" "$GH_PAGES_DIR" 2>/dev/null; then
-        echo "No gh-pages branch found - no packages to list"
-        rm -rf "$GH_PAGES_DIR"
-        exit 0
-    fi
+echo "1. Pulling RPM repo container..."
+if ! docker pull "$RPM_REPO_IMAGE:$TAG" 2>/dev/null; then
+    echo "No RPM repo container found ($RPM_REPO_IMAGE:$TAG) - no packages to list"
+    exit 0
 fi
 
-echo "2. Getting list of remote RPMs..."
-remote_files=$(find "$GH_PAGES_DIR/$REPO_DIR" -maxdepth 1 -type f -name "*.rpm" -exec basename {} \; 2>/dev/null | sort -u)
+echo "2. Getting list of RPMs..."
+TEMP_DIR=$(mktemp -d)
+CID=$(docker create "$RPM_REPO_IMAGE:$TAG")
+docker cp "$CID:/rpm-repo/." "$TEMP_DIR/" 2>/dev/null || true
+docker rm "$CID" > /dev/null
+
+remote_files=$(find "$TEMP_DIR" -maxdepth 1 -type f -name "*.rpm" -exec basename {} \; | sort -u)
+rm -rf "$TEMP_DIR"
 
 if [ -z "$remote_files" ]; then
-    echo "No RPMs found in $REPO_DIR repository"
+    echo "No RPMs found in repository"
 else
     echo "Found remote RPMs:"
     echo "$remote_files"
-fi
-
-# Cleanup temp dir if running locally
-if [ -z "$GITHUB_ACTIONS" ]; then
-    rm -rf "$GH_PAGES_DIR"
 fi
