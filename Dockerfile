@@ -1,17 +1,13 @@
 # Switch to Rocky 8 to match the RPM version
 FROM rockylinux:8
 
-# Copy RPMs from the GHCR RPM repo container
-COPY --from=ghcr.io/gemini-rtsw/rpm-repo:latest /rpm-repo /tmp/rpm-repo
+# RPM repo container must be running on the same Docker network as 'rpm-repo'
+# e.g.: docker build --network=rpm-repo-net ...
+ARG RPM_REPO_URL=http://rpm-repo:8080/rpm-repo/
 
-# Create a local yum repo from the container RPMs
-RUN echo $'\n\
-[local-rpm-repo]\n\
-name=Local RPM Repository\n\
-baseurl=file:///tmp/rpm-repo/\n\
-enabled=1\n\
-gpgcheck=0\n\
-' > /etc/yum.repos.d/local-rpm-repo.repo
+# Create yum repo pointing at the RPM repo container
+RUN echo -e "[github-rpm-repo]\nname=GitHub RPM Repository\nbaseurl=${RPM_REPO_URL}\nenabled=1\ngpgcheck=0" \
+    > /etc/yum.repos.d/rpm-repo.repo
 
 # Enable PowerTools and EPEL
 RUN dnf install -y epel-release && \
@@ -22,7 +18,7 @@ RUN dnf install -y epel-release && \
 RUN dnf makecache --refresh && \
     dnf install -y gcc-c++ && \
     dnf install -y conserver conserver-client && \
-    dnf install -y --nobest --allowerasing $(dnf list available --repo local-rpm-repo -q | grep -v "Available Packages" | cut -f1 -d' ')
+    dnf install -y --nobest --allowerasing $(dnf list available --repo github-rpm-repo -q | grep -v "Available Packages" | cut -f1 -d' ')
 
 # Verify installation
 CMD rpm -qa

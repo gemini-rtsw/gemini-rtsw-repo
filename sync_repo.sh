@@ -7,30 +7,8 @@
 # Locally: pulls the container, syncs RPMs, triggers pipeline
 
 RPM_REPO_IMAGE="ghcr.io/gemini-rtsw/rpm-repo"
-TAG="latest"
-REPO_DIR="rpm-repo"
+TAG="${1:-latest}"
 RPM_DIR="./rpms"
-
-# Parse command line options
-PROD=false
-while getopts "p-:" opt; do
-    case $opt in
-        p) PROD=true ;;
-        -)
-            case "${OPTARG}" in
-                prod) PROD=true ;;
-                *) echo "Invalid option: --${OPTARG}" >&2; exit 1 ;;
-            esac ;;
-        ?) echo "Invalid option: -${OPTARG}" >&2; exit 1 ;;
-    esac
-done
-shift $((OPTIND-1))
-
-if [ "$PROD" = true ]; then
-    TAG="prod"
-    REPO_DIR="prod"
-    echo "Using production repository"
-fi
 
 # Ensure RPM directory exists
 mkdir -p "$RPM_DIR"
@@ -39,11 +17,11 @@ mkdir -p "$RPM_DIR"
 WORK_DIR=$(mktemp -d)
 mkdir -p "$WORK_DIR/rpm-repo"
 
-echo "1. Pulling existing RPM repo container..."
+echo "1. Pulling existing RPM repo container ($TAG)..."
 if docker pull "$RPM_REPO_IMAGE:$TAG" 2>/dev/null; then
-    CID=$(docker create "$RPM_REPO_IMAGE:$TAG")
-    docker cp "$CID:/rpm-repo/." "$WORK_DIR/rpm-repo/" 2>/dev/null || true
-    docker rm "$CID"
+    CID=$(docker create "$RPM_REPO_IMAGE:$TAG" true)
+    docker cp "$CID:/usr/share/nginx/html/rpm-repo/." "$WORK_DIR/rpm-repo/" 2>/dev/null || true
+    docker rm "$CID" > /dev/null
     rm -rf "$WORK_DIR/rpm-repo/repodata"
     echo "Extracted existing RPMs"
 else
@@ -61,7 +39,6 @@ echo "Found local RPMs:"
 echo "$local_files"
 
 echo "4. Syncing RPMs..."
-# Download remote RPMs not in local
 for remote_file in $remote_files; do
     [ -z "$remote_file" ] && continue
     if ! echo "$local_files" | grep -q "^${remote_file}$"; then
@@ -70,7 +47,6 @@ for remote_file in $remote_files; do
     fi
 done
 
-# Copy local RPMs into work dir for the pipeline
 for local_file in $local_files; do
     [ -z "$local_file" ] && continue
     if ! echo "$remote_files" | grep -q "^${local_file}$"; then
@@ -79,16 +55,11 @@ for local_file in $local_files; do
     fi
 done
 
-# Cleanup
 rm -rf "$WORK_DIR"
 
 echo "5. Triggering pipeline to rebuild container..."
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-COMMIT_MSG="Trigger sync after repository update for $REPO_DIR"
-if [ "$PROD" = true ]; then
-    COMMIT_MSG="[PROD_SYNC] $COMMIT_MSG"
-fi
-git commit --allow-empty -m "$COMMIT_MSG"
+git commit --allow-empty -m "Trigger sync for rpm-repo:$TAG"
 git push github "$CURRENT_BRANCH" 2>/dev/null || git push origin "$CURRENT_BRANCH"
 echo "Pipeline triggered via push"
 
