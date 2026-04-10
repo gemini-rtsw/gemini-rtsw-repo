@@ -1,14 +1,13 @@
 # Switch to Rocky 8 to match the RPM version
 FROM rockylinux:8
 
-# Create repository configuration with authentication
-RUN echo $'\n\
-[gitlab-rpm-repo]\n\
-name=GitLab RPM Repository\n\
-baseurl=https://oauth2:glpat-eX-vwr3j7nPZmtYohnXF@gitlab.com/api/v4/projects/66226575/packages/generic/rpm-repo/1.0/\n\
-enabled=1\n\
-gpgcheck=0\n\
-' > /etc/yum.repos.d/gitlab-rpm-repo.repo
+# RPM repo container must be running on the same Docker network as 'rpm-repo'
+# e.g.: docker build --network=rpm-repo-net ...
+ARG RPM_REPO_URL=http://rpm-repo:8080/rpm-repo/
+
+# Create yum repo pointing at the RPM repo container
+RUN echo -e "[github-rpm-repo]\nname=GitHub RPM Repository\nbaseurl=${RPM_REPO_URL}\nenabled=1\ngpgcheck=0" \
+    > /etc/yum.repos.d/rpm-repo.repo
 
 # Enable PowerTools and EPEL
 RUN dnf install -y epel-release && \
@@ -19,7 +18,7 @@ RUN dnf install -y epel-release && \
 RUN dnf makecache --refresh && \
     dnf install -y gcc-c++ && \
     dnf install -y conserver conserver-client && \
-    dnf install -y --nobest --allowerasing $(dnf list available --repo gitlab-rpm-repo -q | grep -v "Available Packages" | cut -f1 -d' ')
+    dnf install -y --nobest --allowerasing $(dnf list available --repo github-rpm-repo -q | grep -v "Available Packages" | cut -f1 -d' ')
 
 # Verify installation
 CMD rpm -qa

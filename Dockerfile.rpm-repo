@@ -1,0 +1,28 @@
+FROM rockylinux:9 AS builder
+
+RUN dnf install -y createrepo_c && dnf clean all
+
+COPY rpm-repo/ /build/rpm-repo/
+
+RUN createrepo_c /build/rpm-repo/
+
+FROM nginx:alpine
+
+# Remove default nginx config
+RUN rm /etc/nginx/conf.d/default.conf
+
+# Serve the RPM repo on port 8080 at /rpm-repo/
+RUN echo 'server { \
+    listen 8080; \
+    root /usr/share/nginx/html; \
+    autoindex on; \
+    location / { \
+        try_files $uri $uri/ =404; \
+    } \
+}' > /etc/nginx/conf.d/rpm-repo.conf
+
+COPY --from=builder /build/rpm-repo/ /usr/share/nginx/html/rpm-repo/
+
+EXPOSE 8080
+
+CMD ["nginx", "-g", "daemon off;"]
