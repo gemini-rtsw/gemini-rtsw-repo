@@ -1,13 +1,12 @@
 #!/bin/bash
 
-# Variables
-TOKEN=$REGISTRY_TOKEN
-PROJECT_ID="66226575" # GitLab project ID
+# Uploads RPM files to the gh-pages branch RPM repository
+
+REPO_DIR="rpm-repo"
 
 # Parse command line options
 NO_PUSH=false
 PROD=false
-REPO_PATH="rpm-repo/1.0"
 
 while getopts "np-:" opt; do
     case $opt in
@@ -24,9 +23,8 @@ while getopts "np-:" opt; do
 done
 shift $((OPTIND-1))
 
-# Set repository path based on prod flag
 if [ "$PROD" = true ]; then
-    REPO_PATH="prod/1.0"
+    REPO_DIR="prod"
     echo "Using production repository"
 fi
 
@@ -41,49 +39,75 @@ if [ $# -lt 1 ]; then
     exit 1
 fi
 
+# Clone gh-pages into temp directory
+TEMP_DIR=$(mktemp -d)
+REPO_URL=$(git remote get-url github 2>/dev/null || git remote get-url origin)
+
+echo "Cloning gh-pages branch..."
+if ! git clone --branch gh-pages --single-branch "$REPO_URL" "$TEMP_DIR" 2>/dev/null; then
+    echo "gh-pages branch doesn't exist yet - creating it"
+    git clone "$REPO_URL" "$TEMP_DIR"
+    cd "$TEMP_DIR"
+    git checkout --orphan gh-pages
+    git rm -rf . 2>/dev/null || true
+    echo "# RPM Repository" > README.md
+    git add README.md
+    git commit -m "Initialize gh-pages branch"
+    git push origin gh-pages
+    cd -
+fi
+
+mkdir -p "$TEMP_DIR/$REPO_DIR"
+
 uploaded_files=()
 
 for RPM_FILE in "$@"; do
-    # Check if the file exists and is a regular file
     if [ ! -f "$RPM_FILE" ]; then
         echo "Error: File '$RPM_FILE' does not exist or is not a regular file, skipping"
         continue
     fi
 
-    # Check if the file has .rpm extension
     if [[ ! "$RPM_FILE" =~ \.rpm$ ]]; then
         echo "Error: File '$RPM_FILE' is not an RPM file (must have .rpm extension), skipping"
         continue
     fi
 
-    # Upload the RPM
-    echo "Uploading $RPM_FILE to $REPO_PATH repository..."
-    curl --header "PRIVATE-TOKEN: $TOKEN" \
-         --upload-file "$RPM_FILE" \
-         "https://gitlab.com/api/v4/projects/$PROJECT_ID/packages/generic/$REPO_PATH/$(basename "$RPM_FILE")"
-
-    echo "Upload complete: $RPM_FILE"
-    uploaded_files+=("$(basename "$RPM_FILE")")
+    BASENAME=$(basename "$RPM_FILE")
+    echo "Uploading $BASENAME to $REPO_DIR repository..."
+    cp "$RPM_FILE" "$TEMP_DIR/$REPO_DIR/$BASENAME"
+    echo "Upload complete: $BASENAME"
+    uploaded_files+=("$BASENAME")
 done
 
 if [ ${#uploaded_files[@]} -eq 0 ]; then
     echo "No valid RPM files were uploaded."
+    rm -rf "$TEMP_DIR"
     exit 1
 fi
+
+# Push to gh-pages
+echo "Pushing to gh-pages..."
+cd "$TEMP_DIR"
+git add -A
+git commit -m "Upload ${#uploaded_files[@]} RPM(s) to $REPO_DIR"
+git push origin gh-pages
+cd -
+
+# Cleanup
+rm -rf "$TEMP_DIR"
 
 # Trigger pipeline via git push unless --no-push was specified
 if [ "$NO_PUSH" = false ]; then
     echo "Triggering repository sync pipeline via git push..."
     CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
     if [ ${#uploaded_files[@]} -eq 1 ]; then
-        COMMIT_MSG="Trigger sync after uploading ${uploaded_files[0]} to $REPO_PATH"
+        COMMIT_MSG="Trigger sync after uploading ${uploaded_files[0]} to $REPO_DIR"
     else
-        COMMIT_MSG="Trigger sync after uploading ${#uploaded_files[@]} RPMs to $REPO_PATH"
+        COMMIT_MSG="Trigger sync after uploading ${#uploaded_files[@]} RPMs to $REPO_DIR"
     fi
     git commit --allow-empty -m "$COMMIT_MSG"
-    git push origin $CURRENT_BRANCH
+    git push github "$CURRENT_BRANCH" 2>/dev/null || git push origin "$CURRENT_BRANCH"
     echo "Pipeline triggered via push"
 else
     echo "Skipping repository sync pipeline trigger (--no-push specified)"
 fi
-
