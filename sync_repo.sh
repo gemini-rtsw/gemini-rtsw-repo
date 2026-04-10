@@ -1,66 +1,61 @@
 #!/bin/bash
 
-# Syncs RPMs between the local rpms/ directory and the GHCR RPM repo container,
-# then triggers the pipeline to rebuild the container with updated RPMs + repodata.
+# Syncs RPMs from the local rpms/ directory into the GHCR RPM repo container.
+# Pulls the existing container, merges in local RPMs, rebuilds, and pushes.
 #
-# In CI: handled by the GitHub Actions workflow directly
-# Locally: pulls the container, syncs RPMs, triggers pipeline
+# Requires: docker, GHCR authentication (docker login ghcr.io)
+
+set -euo pipefail
 
 RPM_REPO_IMAGE="ghcr.io/gemini-rtsw/rpm-repo"
 TAG="latest"
 RPM_DIR="./rpms"
+BUILD_DIR="./rpm-repo"
 
-# Ensure RPM directory exists
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 mkdir -p "$RPM_DIR"
+mkdir -p "$BUILD_DIR"
 
-# Create temp working directory
-WORK_DIR=$(mktemp -d)
-mkdir -p "$WORK_DIR/rpm-repo"
+cleanup() {
+    rm -rf "$BUILD_DIR"
+}
+trap cleanup EXIT
 
 echo "1. Pulling existing RPM repo container ($TAG)..."
 if docker pull "$RPM_REPO_IMAGE:$TAG" 2>/dev/null; then
     CID=$(docker create "$RPM_REPO_IMAGE:$TAG" true)
-    docker cp "$CID:/usr/share/nginx/html/rpm-repo/." "$WORK_DIR/rpm-repo/" 2>/dev/null || true
+    docker cp "$CID:/usr/share/nginx/html/rpm-repo/." "$BUILD_DIR/" 2>/dev/null || true
     docker rm "$CID" > /dev/null
-    rm -rf "$WORK_DIR/rpm-repo/repodata"
-    echo "Extracted existing RPMs"
+    rm -rf "$BUILD_DIR/repodata"
+    echo "Existing RPMs in container:"
+    ls -1 "$BUILD_DIR"/*.rpm 2>/dev/null || echo "  (none)"
 else
-    echo "No existing container image found, starting fresh"
+    echo "No existing container found, starting fresh"
 fi
 
-echo "2. Getting list of remote RPMs..."
-remote_files=$(find "$WORK_DIR/rpm-repo" -maxdepth 1 -type f -name "*.rpm" -exec basename {} \; | sort -u)
-echo "Found remote RPMs:"
-echo "$remote_files"
-
-echo "3. Getting list of local RPMs..."
-local_files=$(find "$RPM_DIR" -maxdepth 1 -type f -name "*.rpm" -exec basename {} \; | sort -u)
-echo "Found local RPMs:"
-echo "$local_files"
-
-echo "4. Syncing RPMs..."
-for remote_file in $remote_files; do
-    [ -z "$remote_file" ] && continue
-    if ! echo "$local_files" | grep -q "^${remote_file}$"; then
-        echo "Downloading: $remote_file"
-        cp "$WORK_DIR/rpm-repo/$remote_file" "$RPM_DIR/$remote_file"
+echo "2. Adding local RPMs..."
+NEW_COUNT=0
+for rpm in "$RPM_DIR"/*.rpm; do
+    [ -f "$rpm" ] || continue
+    BASENAME=$(basename "$rpm")
+    if [ ! -f "$BUILD_DIR/$BASENAME" ]; then
+        echo "  Adding: $BASENAME"
+        cp "$rpm" "$BUILD_DIR/"
+        NEW_COUNT=$((NEW_COUNT + 1))
+    else
+        echo "  Already exists: $BASENAME"
     fi
 done
+echo "Added $NEW_COUNT new RPM(s)"
 
-for local_file in $local_files; do
-    [ -z "$local_file" ] && continue
-    if ! echo "$remote_files" | grep -q "^${local_file}$"; then
-        echo "Adding to repo: $local_file"
-        cp "$RPM_DIR/$local_file" "$WORK_DIR/rpm-repo/$local_file"
-    fi
-done
+echo "3. Final RPM list:"
+ls -1 "$BUILD_DIR"/*.rpm 2>/dev/null || { echo "  No RPMs to sync"; exit 0; }
 
-rm -rf "$WORK_DIR"
+echo "4. Building container..."
+docker build -f "$SCRIPT_DIR/Dockerfile.rpm-repo" -t "$RPM_REPO_IMAGE:$TAG" "$SCRIPT_DIR"
 
-echo "5. Triggering pipeline to rebuild container..."
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-git commit --allow-empty -m "Trigger sync for rpm-repo:$TAG"
-git push github "$CURRENT_BRANCH" 2>/dev/null || git push origin "$CURRENT_BRANCH"
-echo "Pipeline triggered via push"
+echo "5. Pushing container..."
+docker push "$RPM_REPO_IMAGE:$TAG"
 
-echo "Repository sync complete!"
+echo "Sync complete! Pushed $RPM_REPO_IMAGE:$TAG"

@@ -27,18 +27,12 @@ In a Dockerfile (with the repo container on a Docker network):
 
 | Script | Description |
 |--------|-------------|
-| `upload_rpm.sh` | Stage RPMs and trigger a pipeline to add them to the container |
-| `sync_repo.sh` | Sync RPMs between local `rpms/` directory and the container |
+| `sync_repo.sh` | Sync local `rpms/` into the container, rebuild, and push |
 | `list_rpms.sh` | List RPMs in the container |
 
-### Upload RPMs
+### Add RPMs
 
-    ./upload_rpm.sh path/to/package.rpm
-    ./upload_rpm.sh rpms/*.rpm
-    ./upload_rpm.sh -n package.rpm    # stage only, don't trigger pipeline
-
-### Sync repository
-
+    cp path/to/package.rpm rpms/
     ./sync_repo.sh
 
 ### List RPMs
@@ -50,7 +44,7 @@ In a Dockerfile (with the repo container on a Docker network):
 1. RPMs are stored inside a Docker container at `/usr/share/nginx/html/rpm-repo/`
 2. `createrepo_c` generates repodata during the container build
 3. nginx serves everything over HTTP on port 8080
-4. The GitHub Actions pipeline pulls the previous image, adds any new RPMs, rebuilds, and pushes
+4. `sync_repo.sh` pulls the previous image, adds new RPMs, rebuilds, and pushes
 
 ## Requirements
 
