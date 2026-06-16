@@ -1,0 +1,33 @@
+name: probe-tags
+
+# Throwaway probe: can the runner's GITHUB_TOKEN list the rpm-repo package's
+# tags via the GHCR OCI registry API? If this returns a tag list (incl.
+# "latest"), the tag-based publish design needs NO extra PAT. If it 403s, we
+# add a read-only PAT. Delete this workflow once confirmed.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  packages: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: List rpm-repo tags with GITHUB_TOKEN
+        run: |
+          set -euo pipefail
+          # Exchange the Actions token for a GHCR registry bearer token.
+          B64=$(printf '%s:%s' "${{ github.actor }}" "${{ secrets.GITHUB_TOKEN }}" | base64 -w0)
+          TOK=$(curl -s -H "Authorization: Basic $B64" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:gemini-rtsw/rpm-repo:pull" \
+            | python3 -c "import json,sys; print(json.load(sys.stdin).get('token',''))")
+          echo "bearer token length: ${#TOK}"
+          echo "--- HTTP status + body from /v2/.../tags/list ---"
+          curl -s -o /tmp/tags.json -w "HTTP %{http_code}\n" \
+            -H "Authorization: Bearer $TOK" \
+            "https://ghcr.io/v2/gemini-rtsw/rpm-repo/tags/list?n=100"
+          echo "--- body (first 60 tags) ---"
+          python3 -c "import json; d=json.load(open('/tmp/tags.json')); t=d.get('tags') or []; print('tag count:', len(t)); [print(x) for x in t[:60]]" \
+            || cat /tmp/tags.json
