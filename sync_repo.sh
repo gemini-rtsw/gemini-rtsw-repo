@@ -52,8 +52,34 @@ echo "Added $NEW_COUNT new RPM(s)"
 echo "3. Final RPM list:"
 ls -1 "$BUILD_DIR"/*.rpm 2>/dev/null || { echo "  No RPMs to sync"; exit 0; }
 
+# Distribute RPMs into a fixed number of buckets so the container stores them
+# in several stable layers instead of one monolithic ~6GB layer. Each build
+# then re-pushes/pulls only the bucket(s) whose contents changed; unchanged
+# buckets stay cached ("Layer already exists"). Bucketing is by a deterministic
+# hash of the filename, so a given RPM always lands in the same bucket.
+NUM_BUCKETS=16
+echo "3b. Distributing RPMs into $NUM_BUCKETS buckets..."
+for b in $(seq 0 $((NUM_BUCKETS - 1))); do
+    mkdir -p "$BUILD_DIR/$(printf 'b%02d' "$b")"
+done
+for rpm in "$BUILD_DIR"/*.rpm; do
+    [ -f "$rpm" ] || continue
+    BASENAME=$(basename "$rpm")
+    # cksum gives a stable integer hash of the name; mod into a bucket.
+    H=$(printf '%s' "$BASENAME" | cksum | cut -d' ' -f1)
+    BUCKET=$(printf 'b%02d' "$((H % NUM_BUCKETS))")
+    mv "$rpm" "$BUILD_DIR/$BUCKET/"
+done
+echo "Bucket sizes:"
+for b in $(seq 0 $((NUM_BUCKETS - 1))); do
+    d="$BUILD_DIR/$(printf 'b%02d' "$b")"
+    echo "  $(basename "$d"): $(ls -1 "$d"/*.rpm 2>/dev/null | wc -l | tr -d ' ') rpm(s)"
+done
+
 echo "4. Building container..."
-docker build -f "$SCRIPT_DIR/Dockerfile.rpm-repo" -t "$RPM_REPO_IMAGE:$TAG" "$SCRIPT_DIR"
+docker build -f "$SCRIPT_DIR/Dockerfile.rpm-repo" \
+    --build-arg NUM_BUCKETS=$NUM_BUCKETS \
+    -t "$RPM_REPO_IMAGE:$TAG" "$SCRIPT_DIR"
 
 echo "5. Pushing container..."
 docker push "$RPM_REPO_IMAGE:$TAG"

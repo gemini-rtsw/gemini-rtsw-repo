@@ -2,9 +2,19 @@ FROM rockylinux:9 AS builder
 
 RUN dnf install -y createrepo_c && dnf clean all
 
-COPY rpm-repo/ /build/rpm-repo/
+# RPMs arrive pre-distributed into bucket subdirs (b00, b01, ...) by
+# sync_repo.sh. Keep them in buckets in the builder, run createrepo over the
+# whole set, then in the FINAL stage copy each bucket as its own layer into the
+# flat served dir. That way the pushed/pulled image stores RPMs across many
+# stable layers: a build that changes one bucket only moves that layer, and the
+# always-changing repodata is a separate small layer. The served dir is still
+# flat (all *.rpm + repodata at /rpm-repo/), so the dnf baseurl is unchanged.
+COPY rpm-repo/ /build/buckets/
 
-RUN createrepo_c /build/rpm-repo/
+# createrepo needs all RPMs in one dir; assemble a flat view, index it.
+RUN mkdir -p /build/flat && \
+    for d in /build/buckets/b*/; do cp -a "$d"*.rpm /build/flat/ 2>/dev/null || true; done && \
+    createrepo_c /build/flat/
 
 FROM nginx:alpine
 
@@ -21,7 +31,27 @@ RUN echo 'server { \
     } \
 }' > /etc/nginx/conf.d/rpm-repo.conf
 
-COPY --from=builder /build/rpm-repo/ /usr/share/nginx/html/rpm-repo/
+# One COPY per bucket -> one layer per bucket, all flattened into the served
+# dir. Unchanged buckets are identical layers and stay cached on push/pull.
+COPY --from=builder /build/buckets/b00/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b01/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b02/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b03/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b04/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b05/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b06/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b07/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b08/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b09/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b10/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b11/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b12/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b13/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b14/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b15/ /usr/share/nginx/html/rpm-repo/
+
+# repodata last, as its own small layer (regenerated every build).
+COPY --from=builder /build/flat/repodata/ /usr/share/nginx/html/rpm-repo/repodata/
 
 EXPOSE 8080
 
