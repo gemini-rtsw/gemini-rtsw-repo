@@ -57,7 +57,24 @@ ls -1 "$BUILD_DIR"/*.rpm 2>/dev/null || { echo "  No RPMs to sync"; exit 0; }
 # then re-pushes/pulls only the bucket(s) whose contents changed; unchanged
 # buckets stay cached ("Layer already exists"). Bucketing is by a deterministic
 # hash of the filename, so a given RPM always lands in the same bucket.
-NUM_BUCKETS=16
+#
+# NUM_BUCKETS MUST equal the number of "COPY ... b<NN>/" lines in
+# Dockerfile.rpm-repo. If they disagree, RPMs in the unreferenced buckets would
+# be silently dropped from the served repo -- the guard below fails loudly
+# instead. To change the count: update BOTH this value and the Dockerfile, and
+# accept a one-time full re-push (every RPM re-hashes to a new bucket).
+NUM_BUCKETS=32
+
+# Guard: the Dockerfile must COPY exactly NUM_BUCKETS buckets.
+DOCKERFILE="$SCRIPT_DIR/Dockerfile.rpm-repo"
+COPY_BUCKETS=$(grep -cE "buckets/b[0-9][0-9]/" "$DOCKERFILE")
+if [ "$COPY_BUCKETS" -ne "$NUM_BUCKETS" ]; then
+    echo "ERROR: NUM_BUCKETS=$NUM_BUCKETS but Dockerfile.rpm-repo COPYs $COPY_BUCKETS buckets." >&2
+    echo "       They must match, or RPMs in unreferenced buckets are silently dropped." >&2
+    echo "       Update both NUM_BUCKETS and the COPY lines in Dockerfile.rpm-repo." >&2
+    exit 1
+fi
+
 echo "3b. Distributing RPMs into $NUM_BUCKETS buckets..."
 for b in $(seq 0 $((NUM_BUCKETS - 1))); do
     mkdir -p "$BUILD_DIR/$(printf 'b%02d' "$b")"

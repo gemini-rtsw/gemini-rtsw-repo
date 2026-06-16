@@ -9,6 +9,10 @@ RUN dnf install -y createrepo_c && dnf clean all
 # stable layers: a build that changes one bucket only moves that layer, and the
 # always-changing repodata is a separate small layer. The served dir is still
 # flat (all *.rpm + repodata at /rpm-repo/), so the dnf baseurl is unchanged.
+#
+# NOTE: the number of "COPY ... b<NN>/" lines below MUST equal NUM_BUCKETS in
+# sync_repo.sh (currently 32). sync_repo.sh has a guard that fails the build if
+# they disagree.
 COPY rpm-repo/ /build/buckets/
 
 # createrepo needs all RPMs in one dir; assemble a flat view, index it.
@@ -49,6 +53,22 @@ COPY --from=builder /build/buckets/b12/ /usr/share/nginx/html/rpm-repo/
 COPY --from=builder /build/buckets/b13/ /usr/share/nginx/html/rpm-repo/
 COPY --from=builder /build/buckets/b14/ /usr/share/nginx/html/rpm-repo/
 COPY --from=builder /build/buckets/b15/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b16/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b17/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b18/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b19/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b20/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b21/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b22/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b23/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b24/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b25/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b26/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b27/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b28/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b29/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b30/ /usr/share/nginx/html/rpm-repo/
+COPY --from=builder /build/buckets/b31/ /usr/share/nginx/html/rpm-repo/
 
 # repodata last, as its own small layer (regenerated every build).
 COPY --from=builder /build/flat/repodata/ /usr/share/nginx/html/rpm-repo/repodata/
