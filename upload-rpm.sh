@@ -80,20 +80,26 @@ if [ -z "$gh_pass" ]; then
     exit 1
 fi
 basic=$(printf '%s:%s' "$gh_user" "$gh_pass" | base64 | tr -d '\n')
-bearer=$(curl -s -H "Authorization: Basic $basic" \
-    "https://ghcr.io/token?service=ghcr.io&scope=repository:gemini-rtsw/rpm-repo:pull" \
-    | python3 -c "import json,sys; print(json.load(sys.stdin).get('token',''))")
-[ -n "$bearer" ] || { echo "ERROR: failed to get GHCR bearer token" >&2; exit 1; }
+token_resp=$(curl -s -H "Authorization: Basic $basic" \
+    "https://ghcr.io/token?service=ghcr.io&scope=repository:gemini-rtsw/rpm-repo:pull")
+bearer=$(printf '%s' "$token_resp" | python3 -c "import json,sys; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
+if [ -z "$bearer" ]; then
+    echo "ERROR: failed to get GHCR bearer token. Response was:" >&2
+    echo "$token_resp" >&2
+    exit 1
+fi
 
-# Follow pagination via the Link: rel="next" header.
+# Follow pagination via the Link: rel="next" header. NOTE: keep grep/sed out of
+# the way of `set -e` -- a single page has no Link header, and grep exiting 1
+# on no-match would otherwise abort the script.
 url="https://ghcr.io/v2/gemini-rtsw/rpm-repo/tags/list?n=100"
 tags=""
 while [ -n "$url" ]; do
     hdrs=$(mktemp)
     body=$(curl -s -D "$hdrs" -H "Authorization: Bearer $bearer" "$url")
-    page=$(echo "$body" | python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(d.get('tags') or []))")
+    page=$(printf '%s' "$body" | python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(d.get('tags') or []))" 2>/dev/null || true)
     tags="${tags}${page}"$'\n'
-    next=$(grep -i '^link:' "$hdrs" | sed -n 's/.*<\([^>]*\)>; *rel="next".*/\1/p')
+    next=$(sed -n 's/.*<\([^>]*\)>; *rel="next".*/\1/Ip' "$hdrs" || true)
     rm -f "$hdrs"
     if [ -n "$next" ]; then
         case "$next" in /*) url="https://ghcr.io${next}" ;; *) url="$next" ;; esac
@@ -102,8 +108,8 @@ while [ -n "$url" ]; do
     fi
 done
 
-rpm_tags=$(echo "$tags" | grep '^rpm-' | sort -u || true)
-echo "   found $(echo "$rpm_tags" | grep -c . || true) rpm-* tag(s)"
+rpm_tags=$(printf '%s\n' "$tags" | grep '^rpm-' | sort -u || true)
+echo "   found $(printf '%s\n' "$rpm_tags" | grep -c . || true) rpm-* tag(s)"
 
 echo "3. Pulling each rpm-* tag and extracting RPMs into ${RPM_DIR}..."
 for t in $rpm_tags; do
