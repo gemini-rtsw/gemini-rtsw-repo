@@ -208,6 +208,19 @@ build_one() {
         -t "$RPM_REPO_IMAGE:$tag" "$SCRIPT_DIR"
     docker push "$RPM_REPO_IMAGE:$tag"
     rm -rf "$BUILD_DIR"
+
+    # Reclaim disk before the NEXT per-EL build. Each build pulls a multi-GB
+    # base image and produces another multi-GB image; without this the el8
+    # leftovers + el9 build overflow the runner disk (the COPY layers fail with
+    # "no space left on device"). We have already pushed this tag, so its local
+    # image is safe to drop. RPMs are kept on disk in $RPM_DIR (extracted
+    # files), not in these images, so pruning is lossless. We drop built images
+    # + dangling layers but KEEP the build cache (prune --filter dangling) so
+    # the next run still gets "Layer already exists" on unchanged buckets.
+    docker rmi -f "$RPM_REPO_IMAGE:$tag" 2>/dev/null || true
+    docker image prune -af 2>/dev/null || true
+    docker builder prune -f 2>/dev/null || true
+    df -h / 2>/dev/null || true
     echo "[$tag] pushed."
 }
 
