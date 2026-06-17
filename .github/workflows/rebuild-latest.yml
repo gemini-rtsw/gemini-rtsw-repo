@@ -26,6 +26,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # sync_repo.sh pulls the ~6GB :latest + all scratch tags and rebuilds --
+      # free the runner disk first so it doesn't hit "No space left on device".
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /opt/hostedtoolcache /usr/local/lib/android \
+            /usr/share/dotnet /usr/local/.ghcup /opt/ghc \
+            /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
