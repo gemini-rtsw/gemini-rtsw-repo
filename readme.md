@@ -97,16 +97,17 @@ The scratch-tag push (step 1) is race-free. The `:latest` rebuild (step 2) is a
 read-modify-write on one shared mutable tag, so two publishes running at once
 can clobber each other (last writer wins).
 
-- **Within one repo's el8/el9 matrix:** `gemini-rtsw-ci` runs step 1 in each
-  build leg (`--tag-only`) and step 2 **once** in a separate `publish` job,
-  guarded by a `concurrency` group so the el8 and el9 publishes **serialize**.
-  This is the case that previously dropped RPMs (e.g. rtems el9); it is now
-  fixed.
+- **Within one repo's el8/el9 matrix:** each build leg runs step 1 only
+  (`--tag-only`), and step 2 runs **once** as a final `publish` job that
+  `needs:` the whole matrix — so it fires after BOTH el8 and el9 finish. One
+  writer, no race. This is the case that previously dropped RPMs (e.g. rtems
+  el9); it is now fixed. (The publish shows up as the final job in the repo's
+  Actions run.)
 - **Across different repos publishing simultaneously:** still possible to race
-  (GitHub `concurrency` groups are per-repo). **But no RPM is ever lost** — the
-  loser's RPMs survive in their scratch tags, and the next `sync_repo.sh`
-  (any publish, or a manual `rebuild-latest`) re-merges them. A clobbered RPM
-  is at worst *briefly* absent from `:latest`.
+  on `:latest`. **But no RPM is ever lost** — the loser's RPMs survive in their
+  scratch tags, and the next `sync_repo.sh` (any publish, or a manual
+  `rebuild-latest`) re-merges them. A clobbered RPM is at worst *briefly*
+  absent from `:latest`.
 
 Tags **add/overwrite but never remove**; the `:latest` merge + scratch tags are
 what retain history.

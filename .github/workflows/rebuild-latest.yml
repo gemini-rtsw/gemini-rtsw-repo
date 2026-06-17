@@ -18,12 +18,6 @@ permissions:
   contents: read
   packages: write
 
-# Share the publish concurrency group with the CI publish job so a manual heal
-# and an in-flight CI publish never write :latest at the same time.
-concurrency:
-  group: rpm-repo-publish
-  cancel-in-progress: false
-
 jobs:
   rebuild:
     name: Rebuild rpm-repo:latest from scratch tags
