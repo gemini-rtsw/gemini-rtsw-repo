@@ -79,13 +79,28 @@ image and pushes it as `rpm-repo:rpm-<pkgname>-el<N>`. The tag is keyed by
 el9 builds of the same package use different tags, so they never collide. This
 step is race-free.
 
-**2. Publish (`sync_repo.sh`).** The **single writer** of `:latest`. It:
+**2. Publish (`sync_repo.sh`).** The **single writer** of the served images. It:
 - lists every `rpm-*` scratch tag, pulls each, and copies the RPMs into `./rpms`
   (so `./rpms` holds the latest of every package per EL);
-- pulls the previous `:latest` and merges its RPMs in (**preserving
+- folds in the RPMs already in the previous images (**preserving
   older/manually-added versions** — we build against older versions too);
-- runs `createrepo_c`, buckets the RPMs into stable layers, and pushes
-  `:latest`. nginx in that image serves everything over HTTP on port 8080.
+- runs `createrepo_c`, buckets the RPMs into stable layers, and pushes **three**
+  images. nginx in each serves over HTTP on port 8080.
+
+**Three published images (per-EL split):**
+
+| Tag | Contents | Who pulls it |
+|-----|----------|--------------|
+| `:latest-el8` | only `.el8` RPMs (~half size) | EL8 builds (bumped consumers) |
+| `:latest-el9` | only `.el9` RPMs (~half size) | EL9 builds (bumped consumers) |
+| `:latest` | full combined set | back-compat for un-bumped consumers |
+
+The per-EL images exist because each CI runner only builds one EL and pulling
+the full ~6GB combined repo overflowed the runner disk (RTEMS cross-compiles
+are large). A runner now pulls only its EL's image. `build_rpm.sh`/
+`build_docker.sh` default to `:latest-el${EL_VERSION}` (override with the
+`RPM_REPO_IMAGE` env var). `:latest` is kept until every consumer is on a per-EL
+tag, then it can be dropped. Each image has its own anti-truncation guard.
 
 Because `sync_repo.sh` rebuilds from the **full scratch-tag set**, running it at
 any time reconstructs the complete repo — which is why it doubles as the heal

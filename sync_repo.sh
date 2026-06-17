@@ -108,104 +108,111 @@ done
 find "$RPM_DIR" -type f ! -name '*.rpm' -delete 2>/dev/null || true
 echo "   ${RPM_DIR} now has $(find "$RPM_DIR" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ') RPM(s)"
 
-# Anti-truncation guard: remember how many RPMs the existing repo had. The
-# rebuilt repo must never contain FEWER than this (a shrinking publish is
-# always a bug and would take down every consumer of rpm-repo:latest).
-BASE_COUNT=$(find "$BUILD_DIR" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')
-echo "Base repo RPM count (from existing :latest): $BASE_COUNT"
-
-echo "2. Adding local RPMs..."
-NEW_COUNT=0
-for rpm in "$RPM_DIR"/*.rpm; do
+# At this point $RPM_DIR holds the FULL set: every rpm-* scratch tag's RPMs
+# plus whatever was grandfathered in the existing :latest (copied into
+# $BUILD_DIR above). Fold the grandfathered ones into $RPM_DIR too, so $RPM_DIR
+# is the single authoritative source the per-image builds filter from.
+for rpm in "$BUILD_DIR"/*.rpm; do
     [ -f "$rpm" ] || continue
-    BASENAME=$(basename "$rpm")
-    if [ ! -f "$BUILD_DIR/$BASENAME" ]; then
-        echo "  Adding: $BASENAME"
-        cp "$rpm" "$BUILD_DIR/"
-        NEW_COUNT=$((NEW_COUNT + 1))
-    else
-        echo "  Already exists: $BASENAME"
-    fi
+    cp -n "$rpm" "$RPM_DIR/" 2>/dev/null || true
 done
-echo "Added $NEW_COUNT new RPM(s)"
+TOTAL_RPMS=$(find "$RPM_DIR" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')
+echo "Authoritative RPM set: $TOTAL_RPMS RPM(s)"
 
-echo "3. Final RPM list:"
-ls -1 "$BUILD_DIR"/*.rpm 2>/dev/null || { echo "  No RPMs to sync"; exit 0; }
-
-# Distribute RPMs into a fixed number of buckets so the container stores them
-# in several stable layers instead of one monolithic ~6GB layer. Each build
-# then re-pushes/pulls only the bucket(s) whose contents changed; unchanged
-# buckets stay cached ("Layer already exists"). Bucketing is by a deterministic
-# hash of the filename, so a given RPM always lands in the same bucket.
-#
 # NUM_BUCKETS MUST equal the number of "COPY ... b<NN>/" lines in
-# Dockerfile.rpm-repo. If they disagree, RPMs in the unreferenced buckets would
-# be silently dropped from the served repo -- the guard below fails loudly
-# instead. To change the count: update BOTH this value and the Dockerfile, and
-# accept a one-time full re-push (every RPM re-hashes to a new bucket).
+# Dockerfile.rpm-repo. If they disagree, RPMs in unreferenced buckets would be
+# silently dropped -- the guard below fails loudly instead.
 NUM_BUCKETS=32
-
-# Guard: the Dockerfile must COPY exactly NUM_BUCKETS buckets.
 DOCKERFILE="$SCRIPT_DIR/Dockerfile.rpm-repo"
 COPY_BUCKETS=$(grep -cE "buckets/b[0-9][0-9]/" "$DOCKERFILE")
 if [ "$COPY_BUCKETS" -ne "$NUM_BUCKETS" ]; then
     echo "ERROR: NUM_BUCKETS=$NUM_BUCKETS but Dockerfile.rpm-repo COPYs $COPY_BUCKETS buckets." >&2
     echo "       They must match, or RPMs in unreferenced buckets are silently dropped." >&2
-    echo "       Update both NUM_BUCKETS and the COPY lines in Dockerfile.rpm-repo." >&2
     exit 1
 fi
 
-# Count the full flat set right before bucketing -- this is the authoritative
-# number of RPMs that MUST end up in the image.
-PREBUCKET_COUNT=$(find "$BUILD_DIR" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')
-echo "Total RPMs to publish (pre-bucket): $PREBUCKET_COUNT"
+# build_one TAG FILTER -- assemble an image from the RPMs in $RPM_DIR whose
+# filename matches FILTER ('' = all), bucket them into stable layers, run the
+# anti-truncation guards (compared against the existing image of the SAME tag),
+# build, and push as $RPM_REPO_IMAGE:TAG.
+#
+# We publish three tags:
+#   :latest      -- full combined set (back-compat for un-bumped consumers)
+#   :latest-el8  -- only .el8 RPMs (~half size; bumped consumers pull this)
+#   :latest-el9  -- only .el9 RPMs
+# Per-EL images halve what each build runner must pull. :latest is kept until
+# every consumer is bumped to a per-EL tag, then it can be dropped.
+build_one() {
+    local tag="$1" filter="$2"
+    local bdir="./build-${tag}"
+    rm -rf "$bdir"; mkdir -p "$bdir"
 
-echo "3b. Distributing RPMs into $NUM_BUCKETS buckets..."
-for b in $(seq 0 $((NUM_BUCKETS - 1))); do
-    mkdir -p "$BUILD_DIR/$(printf 'b%02d' "$b")"
-done
-for rpm in "$BUILD_DIR"/*.rpm; do
-    [ -f "$rpm" ] || continue
-    BASENAME=$(basename "$rpm")
-    # cksum gives a stable integer hash of the name; mod into a bucket.
-    H=$(printf '%s' "$BASENAME" | cksum | cut -d' ' -f1)
-    BUCKET=$(printf 'b%02d' "$((H % NUM_BUCKETS))")
-    mv "$rpm" "$BUILD_DIR/$BUCKET/"
-done
-echo "Bucket sizes:"
-BUCKETED_COUNT=0
-for b in $(seq 0 $((NUM_BUCKETS - 1))); do
-    d="$BUILD_DIR/$(printf 'b%02d' "$b")"
-    n=$(find "$d" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')
-    BUCKETED_COUNT=$((BUCKETED_COUNT + n))
-    echo "  $(basename "$d"): $n rpm(s)"
-done
-# Also catch any stray RPMs left at the top level (failed to bucket).
-# Use find (exits 0 on no match) so the no-match case does not trip set -e/pipefail.
-STRAY=$(find "$BUILD_DIR" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')
+    # Existing image of this tag -> base count for the truncation guard.
+    local base=0
+    if docker pull "$RPM_REPO_IMAGE:$tag" 2>/dev/null; then
+        local cid; cid=$(docker create "$RPM_REPO_IMAGE:$tag" true)
+        docker cp "$cid:/usr/share/nginx/html/rpm-repo/." "$bdir/" 2>/dev/null || true
+        docker rm "$cid" >/dev/null
+        rm -rf "$bdir/repodata"
+        for sub in "$bdir"/b[0-9][0-9]; do
+            [ -d "$sub" ] || continue
+            mv "$sub"/*.rpm "$bdir/" 2>/dev/null || true
+            rmdir "$sub" 2>/dev/null || true
+        done
+    fi
+    base=$(find "$bdir" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')
 
-# --- Hard safety gates: refuse to publish a truncated/lossy repo -----------
-echo "Counts: base=$BASE_COUNT prebucket=$PREBUCKET_COUNT bucketed=$BUCKETED_COUNT stray=$STRAY"
-if [ "$STRAY" -ne 0 ]; then
-    echo "ERROR: $STRAY RPM(s) failed to land in a bucket. Aborting (would lose them)." >&2
-    exit 1
-fi
-if [ "$BUCKETED_COUNT" -ne "$PREBUCKET_COUNT" ]; then
-    echo "ERROR: bucketing lost RPMs ($PREBUCKET_COUNT -> $BUCKETED_COUNT). Aborting." >&2
-    exit 1
-fi
-if [ "$BUCKETED_COUNT" -lt "$BASE_COUNT" ]; then
-    echo "ERROR: rebuilt repo ($BUCKETED_COUNT) is SMALLER than the existing one ($BASE_COUNT)." >&2
-    echo "       A shrinking publish is always a bug; refusing to push and take down consumers." >&2
-    exit 1
-fi
+    # Copy in the matching RPMs from the authoritative set.
+    local added=0
+    for rpm in "$RPM_DIR"/*.rpm; do
+        [ -f "$rpm" ] || continue
+        local bn; bn=$(basename "$rpm")
+        if [ -n "$filter" ]; then case "$bn" in *"$filter"*) ;; *) continue ;; esac; fi
+        [ -f "$bdir/$bn" ] || { cp "$rpm" "$bdir/"; added=$((added+1)); }
+    done
 
-echo "4. Building container..."
-docker build -f "$SCRIPT_DIR/Dockerfile.rpm-repo" \
-    --build-arg NUM_BUCKETS=$NUM_BUCKETS \
-    -t "$RPM_REPO_IMAGE:$TAG" "$SCRIPT_DIR"
+    local prebucket; prebucket=$(find "$bdir" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')
+    echo "[$tag] base=$base added=$added prebucket=$prebucket (filter='${filter:-ALL}')"
+    if [ "$prebucket" -eq 0 ]; then
+        echo "[$tag] no RPMs match; skipping (not pushing an empty image)."
+        rm -rf "$bdir"; return 0
+    fi
 
-echo "5. Pushing container..."
-docker push "$RPM_REPO_IMAGE:$TAG"
+    for b in $(seq 0 $((NUM_BUCKETS - 1))); do mkdir -p "$bdir/$(printf 'b%02d' "$b")"; done
+    for rpm in "$bdir"/*.rpm; do
+        [ -f "$rpm" ] || continue
+        local bn; bn=$(basename "$rpm")
+        local h; h=$(printf '%s' "$bn" | cksum | cut -d' ' -f1)
+        mv "$rpm" "$bdir/$(printf 'b%02d' "$((h % NUM_BUCKETS))")/"
+    done
+    local bucketed=0
+    for b in $(seq 0 $((NUM_BUCKETS - 1))); do
+        bucketed=$((bucketed + $(find "$bdir/$(printf 'b%02d' "$b")" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')))
+    done
+    local stray; stray=$(find "$bdir" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')
 
-echo "Sync complete! Pushed $RPM_REPO_IMAGE:$TAG"
+    # Anti-truncation guards (per tag).
+    if [ "$stray" -ne 0 ]; then echo "ERROR [$tag]: $stray RPM(s) failed to bucket." >&2; exit 1; fi
+    if [ "$bucketed" -ne "$prebucket" ]; then echo "ERROR [$tag]: bucketing lost RPMs ($prebucket -> $bucketed)." >&2; exit 1; fi
+    if [ "$bucketed" -lt "$base" ]; then
+        echo "ERROR [$tag]: rebuilt ($bucketed) SMALLER than existing ($base); refusing shrinking publish." >&2
+        exit 1
+    fi
+
+    echo "[$tag] building + pushing $RPM_REPO_IMAGE:$tag ($bucketed RPMs)..."
+    # The Dockerfile COPYs from ./rpm-repo; point that at this tag's build dir.
+    rm -rf "$BUILD_DIR"; mv "$bdir" "$BUILD_DIR"
+    docker build -f "$SCRIPT_DIR/Dockerfile.rpm-repo" \
+        --build-arg NUM_BUCKETS=$NUM_BUCKETS \
+        -t "$RPM_REPO_IMAGE:$tag" "$SCRIPT_DIR"
+    docker push "$RPM_REPO_IMAGE:$tag"
+    rm -rf "$BUILD_DIR"
+    echo "[$tag] pushed."
+}
+
+# Build per-EL images first (the disk win), then the combined back-compat tag.
+build_one "latest-el8" ".el8."
+build_one "latest-el9" ".el9."
+build_one "latest"     ""
+
+echo "Sync complete! Pushed :latest, :latest-el8, :latest-el9"
