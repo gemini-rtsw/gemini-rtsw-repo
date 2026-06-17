@@ -51,7 +51,12 @@ for f in "$@"; do
     esac
 done
 [ -n "$primary" ] || { echo "ERROR: could not determine package name" >&2; exit 1; }
-TAG="rpm-${primary}"
+# Scope the scratch tag by EL (.el8/.el9/...) so the el8 and el9 builds of the
+# SAME package don't collide on one tag and clobber each other. Derive the EL
+# from the RPM Release (dist tag).
+eltag=$(rpm -qp --queryformat '%{RELEASE}' "$1" 2>/dev/null | grep -oE 'el[0-9]+' | head -1)
+[ -n "$eltag" ] || eltag="noel"
+TAG="rpm-${primary}-${eltag}"
 
 echo "1. Pushing scratch image ${RPM_REPO_IMAGE}:${TAG} with $# RPM(s)..."
 STAGE=$(mktemp -d)
