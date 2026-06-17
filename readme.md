@@ -6,17 +6,20 @@ The container (`ghcr.io/gemini-rtsw/rpm-repo`) runs nginx and serves RPMs + repo
 
 ## Image tags
 
-The repo is published as three tags (see [How it works](#how-it-works)):
+The repo is published as two per-EL tags (see [How it works](#how-it-works)):
 
 | Tag | Contents | Size |
 |-----|----------|------|
 | `:latest-el8` | only `.el8` RPMs | ~half |
 | `:latest-el9` | only `.el9` RPMs | ~half |
-| `:latest` | combined (back-compat) | full |
 
-**Use the per-EL tag matching your target** — it is ~half the size, so the pull
-fits a CI runner / dev box without overflowing the disk. Use `:latest` only if
-you genuinely need both ELs in one image.
+**Use the per-EL tag matching your target.** Each is ~half the size, so the pull
+fits a CI runner / dev box without overflowing the disk.
+
+> The old combined `:latest` tag is **no longer maintained** — `sync_repo.sh`
+> stopped rebuilding it (it wasted time/space on a ~6GB image once all consumers
+> moved to per-EL). The stale tag may still exist in GHCR but is frozen; do not
+> use it. Pull a per-EL tag instead.
 
 ## Using the repository
 
@@ -47,9 +50,9 @@ based on `--el`:
     ./gemini-rtsw-ci/build_rpm.sh --el 9     # pulls :latest-el9
 
 - Keep the repo's `gemini-rtsw-ci` submodule current (an old submodule still
-  pulls the full `:latest`).
-- Override the image if needed:
-  `RPM_REPO_IMAGE=ghcr.io/gemini-rtsw/rpm-repo:latest ./gemini-rtsw-ci/build_rpm.sh --el 8`
+  pulls the now-frozen `:latest`).
+- Override the image if needed (e.g. to test a specific tag):
+  `RPM_REPO_IMAGE=ghcr.io/gemini-rtsw/rpm-repo:latest-el8 ./gemini-rtsw-ci/build_rpm.sh --el 8`
 
 ## Scripts
 
@@ -115,20 +118,21 @@ step is race-free.
 - runs `createrepo_c`, buckets the RPMs into stable layers, and pushes **three**
   images. nginx in each serves over HTTP on port 8080.
 
-**Three published images (per-EL split):**
+**Two published images (per-EL split):**
 
 | Tag | Contents | Who pulls it |
 |-----|----------|--------------|
-| `:latest-el8` | only `.el8` RPMs (~half size) | EL8 builds (bumped consumers) |
-| `:latest-el9` | only `.el9` RPMs (~half size) | EL9 builds (bumped consumers) |
-| `:latest` | full combined set | back-compat for un-bumped consumers |
+| `:latest-el8` | only `.el8` RPMs (~half size) | EL8 builds |
+| `:latest-el9` | only `.el9` RPMs (~half size) | EL9 builds |
 
 The per-EL images exist because each CI runner only builds one EL and pulling
 the full ~6GB combined repo overflowed the runner disk (RTEMS cross-compiles
 are large). A runner now pulls only its EL's image. `build_rpm.sh`/
 `build_docker.sh` default to `:latest-el${EL_VERSION}` (override with the
-`RPM_REPO_IMAGE` env var). `:latest` is kept until every consumer is on a per-EL
-tag, then it can be dropped. Each image has its own anti-truncation guard.
+`RPM_REPO_IMAGE` env var). Each image has its own anti-truncation guard.
+
+The old combined `:latest` is **no longer maintained** (`sync_repo.sh` stopped
+rebuilding it once all consumers moved to per-EL tags).
 
 Because `sync_repo.sh` rebuilds from the **full scratch-tag set**, running it at
 any time reconstructs the complete repo — which is why it doubles as the heal

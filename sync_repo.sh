@@ -136,12 +136,13 @@ fi
 # anti-truncation guards (compared against the existing image of the SAME tag),
 # build, and push as $RPM_REPO_IMAGE:TAG.
 #
-# We publish three tags:
-#   :latest      -- full combined set (back-compat for un-bumped consumers)
-#   :latest-el8  -- only .el8 RPMs (~half size; bumped consumers pull this)
+# We publish two tags:
+#   :latest-el8  -- only .el8 RPMs (~half size; consumers pull this)
 #   :latest-el9  -- only .el9 RPMs
-# Per-EL images halve what each build runner must pull. :latest is kept until
-# every consumer is bumped to a per-EL tag, then it can be dropped.
+# Per-EL images halve what each build runner must pull. The old combined
+# :latest is NO LONGER maintained (all consumers pull per-EL) -- the stale tag
+# is left in place but never rebuilt, so we don't waste build time/space on the
+# full ~6GB image.
 build_one() {
     local tag="$1" filter="$2"
     local bdir="./build-${tag}"
@@ -210,9 +211,8 @@ build_one() {
     echo "[$tag] pushed."
 }
 
-# Build per-EL images first (the disk win), then the combined back-compat tag.
+# Per-EL images only. The combined :latest is intentionally not rebuilt.
 build_one "latest-el8" ".el8."
 build_one "latest-el9" ".el9."
-build_one "latest"     ""
 
-echo "Sync complete! Pushed :latest, :latest-el8, :latest-el9"
+echo "Sync complete! Pushed :latest-el8, :latest-el9 (:latest no longer maintained)"
