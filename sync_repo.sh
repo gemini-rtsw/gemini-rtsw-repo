@@ -28,11 +28,24 @@ if docker pull "$RPM_REPO_IMAGE:$TAG" 2>/dev/null; then
     docker cp "$CID:/usr/share/nginx/html/rpm-repo/." "$BUILD_DIR/" 2>/dev/null || true
     docker rm "$CID" > /dev/null
     rm -rf "$BUILD_DIR/repodata"
+    # Defensive: a previous build may have served RPMs nested in bucket dirs.
+    # Flatten any bNN/ subdirs back to the top so none are missed below.
+    for sub in "$BUILD_DIR"/b[0-9][0-9]; do
+        [ -d "$sub" ] || continue
+        mv "$sub"/*.rpm "$BUILD_DIR/" 2>/dev/null || true
+        rmdir "$sub" 2>/dev/null || true
+    done
     echo "Existing RPMs in container:"
     ls -1 "$BUILD_DIR"/*.rpm 2>/dev/null || echo "  (none)"
 else
     echo "No existing container found, starting fresh"
 fi
+
+# Anti-truncation guard: remember how many RPMs the existing repo had. The
+# rebuilt repo must never contain FEWER than this (a shrinking publish is
+# always a bug and would take down every consumer of rpm-repo:latest).
+BASE_COUNT=$(find "$BUILD_DIR" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')
+echo "Base repo RPM count (from existing :latest): $BASE_COUNT"
 
 echo "2. Adding local RPMs..."
 NEW_COUNT=0
@@ -75,6 +88,11 @@ if [ "$COPY_BUCKETS" -ne "$NUM_BUCKETS" ]; then
     exit 1
 fi
 
+# Count the full flat set right before bucketing -- this is the authoritative
+# number of RPMs that MUST end up in the image.
+PREBUCKET_COUNT=$(find "$BUILD_DIR" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')
+echo "Total RPMs to publish (pre-bucket): $PREBUCKET_COUNT"
+
 echo "3b. Distributing RPMs into $NUM_BUCKETS buckets..."
 for b in $(seq 0 $((NUM_BUCKETS - 1))); do
     mkdir -p "$BUILD_DIR/$(printf 'b%02d' "$b")"
@@ -88,10 +106,32 @@ for rpm in "$BUILD_DIR"/*.rpm; do
     mv "$rpm" "$BUILD_DIR/$BUCKET/"
 done
 echo "Bucket sizes:"
+BUCKETED_COUNT=0
 for b in $(seq 0 $((NUM_BUCKETS - 1))); do
     d="$BUILD_DIR/$(printf 'b%02d' "$b")"
-    echo "  $(basename "$d"): $(ls -1 "$d"/*.rpm 2>/dev/null | wc -l | tr -d ' ') rpm(s)"
+    n=$(find "$d" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')
+    BUCKETED_COUNT=$((BUCKETED_COUNT + n))
+    echo "  $(basename "$d"): $n rpm(s)"
 done
+# Also catch any stray RPMs left at the top level (failed to bucket).
+# Use find (exits 0 on no match) so the no-match case does not trip set -e/pipefail.
+STRAY=$(find "$BUILD_DIR" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')
+
+# --- Hard safety gates: refuse to publish a truncated/lossy repo -----------
+echo "Counts: base=$BASE_COUNT prebucket=$PREBUCKET_COUNT bucketed=$BUCKETED_COUNT stray=$STRAY"
+if [ "$STRAY" -ne 0 ]; then
+    echo "ERROR: $STRAY RPM(s) failed to land in a bucket. Aborting (would lose them)." >&2
+    exit 1
+fi
+if [ "$BUCKETED_COUNT" -ne "$PREBUCKET_COUNT" ]; then
+    echo "ERROR: bucketing lost RPMs ($PREBUCKET_COUNT -> $BUCKETED_COUNT). Aborting." >&2
+    exit 1
+fi
+if [ "$BUCKETED_COUNT" -lt "$BASE_COUNT" ]; then
+    echo "ERROR: rebuilt repo ($BUCKETED_COUNT) is SMALLER than the existing one ($BASE_COUNT)." >&2
+    echo "       A shrinking publish is always a bug; refusing to push and take down consumers." >&2
+    exit 1
+fi
 
 echo "4. Building container..."
 docker build -f "$SCRIPT_DIR/Dockerfile.rpm-repo" \
