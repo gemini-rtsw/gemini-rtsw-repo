@@ -4,11 +4,25 @@ RPM package repository stored as a Docker container on GitHub Container Registry
 
 The container (`ghcr.io/gemini-rtsw/rpm-repo`) runs nginx and serves RPMs + repodata over HTTP on port 8080.
 
+## Image tags
+
+The repo is published as three tags (see [How it works](#how-it-works)):
+
+| Tag | Contents | Size |
+|-----|----------|------|
+| `:latest-el8` | only `.el8` RPMs | ~half |
+| `:latest-el9` | only `.el9` RPMs | ~half |
+| `:latest` | combined (back-compat) | full |
+
+**Use the per-EL tag matching your target** — it is ~half the size, so the pull
+fits a CI runner / dev box without overflowing the disk. Use `:latest` only if
+you genuinely need both ELs in one image.
+
 ## Using the repository
 
-Start the RPM repo container:
+Start the RPM repo container (pick the tag for your EL):
 
-    docker run -d --name rpm-repo -p 8080:8080 ghcr.io/gemini-rtsw/rpm-repo:latest
+    docker run -d --name rpm-repo -p 8080:8080 ghcr.io/gemini-rtsw/rpm-repo:latest-el8
 
 Point dnf at it:
 
@@ -22,6 +36,20 @@ In a Dockerfile (with the repo container on a Docker network):
     ARG RPM_REPO_URL=http://rpm-repo:8080/rpm-repo/
     RUN echo -e "[rpm-repo]\nname=RPM Repo\nbaseurl=${RPM_REPO_URL}\nenabled=1\ngpgcheck=0" \
         > /etc/yum.repos.d/rpm-repo.repo
+
+## Local package builds
+
+Building a package locally (via `gemini-rtsw-ci/build_rpm.sh`) uses this repo to
+resolve dependencies. The build scripts pull the **per-EL tag automatically**
+based on `--el`:
+
+    ./gemini-rtsw-ci/build_rpm.sh --el 8     # pulls :latest-el8
+    ./gemini-rtsw-ci/build_rpm.sh --el 9     # pulls :latest-el9
+
+- Keep the repo's `gemini-rtsw-ci` submodule current (an old submodule still
+  pulls the full `:latest`).
+- Override the image if needed:
+  `RPM_REPO_IMAGE=ghcr.io/gemini-rtsw/rpm-repo:latest ./gemini-rtsw-ci/build_rpm.sh --el 8`
 
 ## Scripts
 
