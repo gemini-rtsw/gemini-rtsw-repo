@@ -1,0 +1,47 @@
+name: backfill-tags
+
+# ONE-TIME migration to the per-RPM scratch-tag model. Reads every RPM out of
+# the current :latest-el8 / :latest-el9 images (including irreplaceable
+# grandfathered RPMs) and pushes each as its own rpm-<NVRA> scratch tag, so the
+# tags become the complete source of truth that sync_repo.sh rebuilds from.
+#
+# Run ONCE from the GitHub UI: Actions -> backfill-tags -> Run workflow.
+# Idempotent: re-running just re-pushes identical tags (no-op uploads).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  backfill:
+    name: Backfill per-RPM scratch tags from current images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Pulls both ~3GB images; free the runner disk first.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /opt/hostedtoolcache /usr/local/lib/android \
+            /usr/share/dotnet /usr/local/.ghcup /opt/ghc \
+            /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Backfill tags
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          chmod +x backfill-tags.sh tag-lib.sh
+          ./backfill-tags.sh

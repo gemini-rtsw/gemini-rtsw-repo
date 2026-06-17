@@ -93,18 +93,19 @@ pull_one() {
 }
 export -f pull_one
 export RPM_REPO_IMAGE RPM_DIR
-# xargs -P for concurrency; --halt would be ideal but isn't portable, so we
-# verify the extracted count against TAG_COUNT below to catch any failed pull.
+# xargs -P for concurrency. A pull failure would silently drop an RPM, so we
+# guard below. NOTE: we do NOT require EXTRACTED == TAG_COUNT. New per-NVRA tags
+# hold exactly one RPM, but LEGACY per-package tags (rpm-<pkg>-el<N>, from before
+# this model) may hold 1-2 RPMs AND overlap with the per-NVRA tags -- extraction
+# dedups by filename, so EXTRACTED can legitimately be < TAG_COUNT during the
+# transition. The real safety net is the per-EL anti-truncation marker in
+# build_one (never publish fewer RPMs than last time).
 printf '%s\n' $rpm_tags | xargs -P 8 -I{} bash -c 'pull_one "$@"' _ {}
 find "$RPM_DIR" -type f ! -name '*.rpm' -delete 2>/dev/null || true
 EXTRACTED=$(find "$RPM_DIR" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')
-echo "   extracted $EXTRACTED RPM(s) from $TAG_COUNT tag(s)"
-
-# Each tag holds exactly one RPM, so extracted must equal tag count. A shortfall
-# means a pull silently failed -- abort rather than publish an incomplete repo.
-if [ "$EXTRACTED" -lt "$TAG_COUNT" ]; then
-    echo "ERROR: extracted $EXTRACTED RPM(s) but there are $TAG_COUNT tags." >&2
-    echo "       A tag pull must have failed; refusing to publish (would drop RPMs)." >&2
+echo "   extracted $EXTRACTED distinct RPM(s) from $TAG_COUNT tag(s)"
+if [ "$EXTRACTED" -eq 0 ]; then
+    echo "ERROR: extracted 0 RPMs from $TAG_COUNT tags -- all pulls failed?" >&2
     exit 1
 fi
 

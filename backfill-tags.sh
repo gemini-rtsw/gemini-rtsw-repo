@@ -29,6 +29,19 @@ trap cleanup EXIT
 total_in_images=0
 total_pushed=0
 
+# write_count_marker TAG N -- record an image's RPM count as a tiny tag, so
+# sync_repo.sh's anti-truncation guard has a floor from the very first publish.
+write_count_marker() {
+    local tag="$1" n="$2" sdir
+    sdir=$(mktemp -d)
+    : > "$sdir/${n}.count"
+    printf 'FROM scratch\nCOPY *.count /\n' > "$sdir/Dockerfile"
+    docker build -t "$RPM_REPO_IMAGE:rpm-count-${tag}" "$sdir" >/dev/null
+    docker push "$RPM_REPO_IMAGE:rpm-count-${tag}" >/dev/null
+    rm -rf "$sdir"
+    echo "  wrote anti-truncation marker rpm-count-${tag} = $n"
+}
+
 for tag in latest-el8 latest-el9; do
     echo "=== Source image: $RPM_REPO_IMAGE:$tag ==="
     if ! docker pull -q "$RPM_REPO_IMAGE:$tag" >/dev/null 2>&1; then
@@ -63,6 +76,10 @@ for tag in latest-el8 latest-el9; do
         total_pushed=$((total_pushed + 1))
         echo "  [$total_pushed] $t"
     done < <(find "$dir" -maxdepth 1 -name '*.rpm' | sort)
+
+    # Seed the anti-truncation floor for this image at its current full count,
+    # so the first pure-from-tags publish cannot truncate below it.
+    write_count_marker "$tag" "$n"
 done
 
 echo ""
