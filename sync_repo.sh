@@ -1,9 +1,19 @@
 #!/bin/bash
 
-# Syncs RPMs from the local rpms/ directory into the GHCR RPM repo container.
-# Pulls the existing container, merges in local RPMs, rebuilds, and pushes.
+# Rebuilds rpm-repo:latest (the served yum repo) from the durable source of
+# truth: the per-package scratch tags (rpm-<pkg>-el<N>) PLUS whatever RPMs are
+# already in :latest (grandfathered/manually-added) PLUS anything in ./rpms.
 #
-# Requires: docker, GHCR authentication (docker login ghcr.io)
+# This is the SINGLE WRITER of :latest. It is safe to run standalone:
+#   ./sync_repo.sh            # heal/force-rebuild :latest from all scratch tags
+# Because it pulls every rpm-* tag itself, running it alone re-merges any RPM
+# that a racing build dropped from :latest -- no rebuild of the package needed.
+#
+# upload-rpm.sh pushes a package's scratch tag, then calls this to publish.
+#
+# Requires: docker, GHCR authentication (docker login ghcr.io) with read AND
+# write on the rpm-repo package, plus GITHUB_TOKEN (or CR_PAT) for the tag-list
+# API. GITHUB_ACTOR/whoami supplies the registry user.
 
 set -euo pipefail
 
@@ -40,6 +50,63 @@ if docker pull "$RPM_REPO_IMAGE:$TAG" 2>/dev/null; then
 else
     echo "No existing container found, starting fresh"
 fi
+
+# --- Collect every rpm-* scratch tag into ./rpms ---------------------------
+# The scratch tags (rpm-<pkg>-el<N>, pushed by upload-rpm.sh) are the durable
+# source of truth: a racing publish may drop a package from :latest, but never
+# from its scratch tag. Pulling them all here is what makes a standalone run of
+# this script HEAL :latest. RPMs land in $RPM_DIR and are merged in below.
+echo "1b. Listing rpm-* scratch tags..."
+gh_user="${GITHUB_ACTOR:-$(whoami)}"
+gh_pass="${GITHUB_TOKEN:-${CR_PAT:-}}"
+if [ -z "$gh_pass" ]; then
+    echo "ERROR: set GITHUB_TOKEN (or CR_PAT) so scratch tags can be listed" >&2
+    exit 1
+fi
+basic=$(printf '%s:%s' "$gh_user" "$gh_pass" | base64 | tr -d '\n')
+token_resp=$(curl -s -H "Authorization: Basic $basic" \
+    "https://ghcr.io/token?service=ghcr.io&scope=repository:gemini-rtsw/rpm-repo:pull")
+bearer=$(printf '%s' "$token_resp" | python3 -c "import json,sys; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
+if [ -z "$bearer" ]; then
+    echo "ERROR: failed to get GHCR bearer token. Response was:" >&2
+    echo "$token_resp" >&2
+    exit 1
+fi
+
+# Follow pagination via the Link: rel="next" header. Keep grep/sed clear of
+# set -e: a single page has no Link header and grep exiting 1 would abort.
+url="https://ghcr.io/v2/gemini-rtsw/rpm-repo/tags/list?n=100"
+tags=""
+while [ -n "$url" ]; do
+    hdrs=$(mktemp)
+    body=$(curl -s -D "$hdrs" -H "Authorization: Bearer $bearer" "$url")
+    page=$(printf '%s' "$body" | python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(d.get('tags') or []))" 2>/dev/null || true)
+    tags="${tags}${page}"$'\n'
+    next=$(sed -n 's/.*<\([^>]*\)>; *rel="next".*/\1/Ip' "$hdrs" || true)
+    rm -f "$hdrs"
+    if [ -n "$next" ]; then
+        case "$next" in /*) url="https://ghcr.io${next}" ;; *) url="$next" ;; esac
+    else
+        url=""
+    fi
+done
+
+rpm_tags=$(printf '%s\n' "$tags" | grep '^rpm-' | sort -u || true)
+echo "   found $(printf '%s\n' "$rpm_tags" | grep -c . || true) rpm-* tag(s)"
+
+echo "1c. Pulling each rpm-* tag and extracting RPMs into ${RPM_DIR}..."
+for t in $rpm_tags; do
+    [ -n "$t" ] || continue
+    docker pull -q "${RPM_REPO_IMAGE}:${t}" >/dev/null
+    # `docker create` records but never runs the command; scratch images have no
+    # default CMD, so pass a dummy arg to satisfy create, then copy the rootfs.
+    cid=$(docker create "${RPM_REPO_IMAGE}:${t}" x)
+    docker cp "${cid}:/." "$RPM_DIR/" 2>/dev/null || true
+    docker rm "$cid" >/dev/null
+done
+# Scratch images contain only the .rpm files; drop anything else defensively.
+find "$RPM_DIR" -type f ! -name '*.rpm' -delete 2>/dev/null || true
+echo "   ${RPM_DIR} now has $(find "$RPM_DIR" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ') RPM(s)"
 
 # Anti-truncation guard: remember how many RPMs the existing repo had. The
 # rebuilt repo must never contain FEWER than this (a shrinking publish is

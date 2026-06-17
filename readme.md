@@ -27,17 +27,37 @@ In a Dockerfile (with the repo container on a Docker network):
 
 | Script | Description |
 |--------|-------------|
-| `upload-rpm.sh` | **Primary entry point.** Publish RPM(s): push as a per-package tag, then rebuild `:latest` from all tags. Used by CI and humans. |
-| `sync_repo.sh` | Rebuild `:latest` from whatever is in `./rpms` (plus the previous `:latest`). Called by `upload-rpm.sh`; rarely run directly. |
+| `upload-rpm.sh` | **Register a package.** Push RPM(s) as a per-package, per-EL scratch tag. With no flag, also publishes (calls `sync_repo.sh`). With `--tag-only`, pushes the tag and stops. |
+| `sync_repo.sh` | **Publish `:latest`.** Pull EVERY `rpm-*` scratch tag + the previous `:latest`, rebuild, and push `:latest`. The single writer of `:latest`. Safe to run standalone to **heal** `:latest`. |
 | `list_rpms.sh` | List RPMs in the `:latest` container |
 | `download_from_gitlab.sh` | One-time migration: pull all RPMs out of the old GitLab registry into `rpms/` |
 
-### Add RPMs (CI and manual — same path)
+### Add a package manually
 
     ./upload-rpm.sh path/to/package.rpm [path/to/package-devel.rpm ...]
 
-This is what `gemini-rtsw-ci` calls for every build, and what you run by hand
-to add a package manually. No need to touch `rpms/` or `sync_repo.sh` yourself.
+Pushes the package's scratch tag, then rebuilds and pushes `:latest`. For a
+one-off manual upload this single command is fine.
+
+If you instead want to register several packages and publish once at the end:
+
+    ./upload-rpm.sh --tag-only pkgA.rpm pkgA-devel.rpm   # tag only, no publish
+    ./upload-rpm.sh --tag-only pkgB.rpm                  # tag only, no publish
+    ./sync_repo.sh                                       # publish :latest once
+
+### Heal / force-rebuild `:latest`
+
+If a package is present as a scratch tag but missing from `:latest` (e.g. two
+matrix legs raced on the `:latest` rebuild and the loser got clobbered), just
+republish — **no package rebuild needed**:
+
+    ./sync_repo.sh
+
+It pulls every `rpm-*` scratch tag and re-merges them, so the clobbered RPM
+returns. Because `:latest` is ~6GB to pull and push, prefer running this on a
+runner rather than a metered/slow connection: trigger the **`rebuild-latest`**
+workflow from the GitHub UI (**Actions → rebuild-latest → Run workflow**),
+which runs `sync_repo.sh` on a GitHub runner.
 
 ### List RPMs
 
@@ -50,26 +70,46 @@ Each package's RPM(s) are stored as their own **tag** on the `rpm-repo` package:
 containing just that package's `.rpm` files. The served yum repo lives in the
 `:latest` tag.
 
-`upload-rpm.sh` does the publish:
+Publishing is split into two responsibilities:
 
-1. Packs the given RPM(s) into a `FROM scratch` image and pushes it as
-   `rpm-repo:rpm-<pkgname>`. The tag is keyed by **package name only** (no
-   version/hash), so re-publishing a package **overwrites** its tag — one
-   current RPM image per package.
-2. Lists every `rpm-*` tag, pulls each, and copies the RPMs into `./rpms`, so
-   `./rpms` holds the latest of every package.
-3. Hands off to `sync_repo.sh`, which additionally pulls the previous `:latest`
-   and merges its RPMs in (**preserving older/manually-added versions** — we
-   build against older versions too), runs `createrepo_c`, and pushes
-   `:latest`. nginx in that image serves everything over HTTP on port 8080.
+**1. Register (`upload-rpm.sh`).** Packs the given RPM(s) into a `FROM scratch`
+image and pushes it as `rpm-repo:rpm-<pkgname>-el<N>`. The tag is keyed by
+**package name + EL** (no version/hash), so re-publishing a package
+**overwrites** its tag — one current RPM image per package per EL. The el8 and
+el9 builds of the same package use different tags, so they never collide. This
+step is race-free.
 
-### Why this avoids a publish race
+**2. Publish (`sync_repo.sh`).** The **single writer** of `:latest`. It:
+- lists every `rpm-*` scratch tag, pulls each, and copies the RPMs into `./rpms`
+  (so `./rpms` holds the latest of every package per EL);
+- pulls the previous `:latest` and merges its RPMs in (**preserving
+  older/manually-added versions** — we build against older versions too);
+- runs `createrepo_c`, buckets the RPMs into stable layers, and pushes
+  `:latest`. nginx in that image serves everything over HTTP on port 8080.
 
-The `rpm-*` tags are distinct per package, so concurrent builds never clobber
-each other's RPMs. `:latest` is rebuilt from the **full tag set** (plus the
-previous `:latest`) every time, so two builds racing to push `:latest` converge
-to the same complete result — no cross-repo lock needed. Tags **add/overwrite
-but never remove**; the `:latest` merge is what retains history.
+Because `sync_repo.sh` rebuilds from the **full scratch-tag set**, running it at
+any time reconstructs the complete repo — which is why it doubles as the heal
+command above.
+
+### The publish race, and how the split contains it
+
+The scratch-tag push (step 1) is race-free. The `:latest` rebuild (step 2) is a
+read-modify-write on one shared mutable tag, so two publishes running at once
+can clobber each other (last writer wins).
+
+- **Within one repo's el8/el9 matrix:** `gemini-rtsw-ci` runs step 1 in each
+  build leg (`--tag-only`) and step 2 **once** in a separate `publish` job,
+  guarded by a `concurrency` group so the el8 and el9 publishes **serialize**.
+  This is the case that previously dropped RPMs (e.g. rtems el9); it is now
+  fixed.
+- **Across different repos publishing simultaneously:** still possible to race
+  (GitHub `concurrency` groups are per-repo). **But no RPM is ever lost** — the
+  loser's RPMs survive in their scratch tags, and the next `sync_repo.sh`
+  (any publish, or a manual `rebuild-latest`) re-merges them. A clobbered RPM
+  is at worst *briefly* absent from `:latest`.
+
+Tags **add/overwrite but never remove**; the `:latest` merge + scratch tags are
+what retain history.
 
 ## Requirements
 

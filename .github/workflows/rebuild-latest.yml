@@ -1,0 +1,49 @@
+name: rebuild-latest
+
+# Manually rebuild rpm-repo:latest from all rpm-* scratch tags.
+#
+# Use this to HEAL :latest when a package is present as a scratch tag but
+# missing from :latest -- e.g. after two matrix legs raced on the :latest
+# rebuild and the loser's RPM got clobbered (it survives in its scratch tag,
+# and this job re-merges it). No package rebuild needed.
+#
+# Trigger from the GitHub UI: Actions -> rebuild-latest -> Run workflow.
+# Runs on a GitHub runner, so it does NOT use your local bandwidth (:latest is
+# ~6GB to pull/push).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# Share the publish concurrency group with the CI publish job so a manual heal
+# and an in-flight CI publish never write :latest at the same time.
+concurrency:
+  group: rpm-repo-publish
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    name: Rebuild rpm-repo:latest from scratch tags
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rebuild and push :latest
+        env:
+          # sync_repo.sh uses these to list rpm-* tags via the GHCR API.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          chmod +x sync_repo.sh
+          ./sync_repo.sh
