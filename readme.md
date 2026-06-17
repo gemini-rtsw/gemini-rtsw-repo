@@ -58,37 +58,37 @@ based on `--el`:
 
 | Script | Description |
 |--------|-------------|
-| `upload-rpm.sh` | **Register a package.** Push RPM(s) as a per-package, per-EL scratch tag. With no flag, also publishes (calls `sync_repo.sh`). With `--tag-only`, pushes the tag and stops. |
-| `sync_repo.sh` | **Publish `:latest`.** Pull EVERY `rpm-*` scratch tag + the previous `:latest`, rebuild, and push `:latest`. The single writer of `:latest`. Safe to run standalone to **heal** `:latest`. |
-| `list_rpms.sh` | List RPMs in the `:latest` container |
+| `upload-rpm.sh` | **Register RPM(s).** Push EACH RPM as its own per-NVRA scratch tag `rpm-<NVRA>`. With no flag, also publishes (calls `sync_repo.sh`). With `--tag-only`, pushes tags and stops. |
+| `sync_repo.sh` | **Publish.** Rebuild `:latest-el8` / `:latest-el9` **purely from the `rpm-*` tags** (no merge-pull of the old image). Safe to run standalone to **heal**. |
+| `backfill-tags.sh` | **One-time migration.** Enumerate every RPM in the current images (incl. grandfathered) and push each as a per-NVRA tag, so the tags become the complete source of truth. |
+| `tag-lib.sh` | Shared helper: `rpm_tag_for` maps an RPM filename to its scratch tag (case-preserved, sanitized). |
+| `list_rpms.sh` | List RPMs in an image |
 | `download_from_gitlab.sh` | One-time migration: pull all RPMs out of the old GitLab registry into `rpms/` |
 
 ### Add a package manually
 
     ./upload-rpm.sh path/to/package.rpm [path/to/package-devel.rpm ...]
 
-Pushes the package's scratch tag, then rebuilds and pushes `:latest`. For a
+Pushes each RPM's scratch tag, then rebuilds and pushes the per-EL images. For a
 one-off manual upload this single command is fine.
 
 If you instead want to register several packages and publish once at the end:
 
-    ./upload-rpm.sh --tag-only pkgA.rpm pkgA-devel.rpm   # tag only, no publish
-    ./upload-rpm.sh --tag-only pkgB.rpm                  # tag only, no publish
-    ./sync_repo.sh                                       # publish :latest once
+    ./upload-rpm.sh --tag-only pkgA.rpm pkgA-devel.rpm   # tags only, no publish
+    ./upload-rpm.sh --tag-only pkgB.rpm                  # tags only, no publish
+    ./sync_repo.sh                                       # rebuild images once
 
-### Heal / force-rebuild `:latest`
+### Heal / force-rebuild the images
 
-If a package is present as a scratch tag but missing from `:latest` (e.g. two
-matrix legs raced on the `:latest` rebuild and the loser got clobbered), just
+If an RPM is present as a scratch tag but missing from a served image, just
 republish — **no package rebuild needed**:
 
     ./sync_repo.sh
 
-It pulls every `rpm-*` scratch tag and re-merges them, so the clobbered RPM
-returns. Because `:latest` is ~6GB to pull and push, prefer running this on a
-runner rather than a metered/slow connection: trigger the **`rebuild-latest`**
-workflow from the GitHub UI (**Actions → rebuild-latest → Run workflow**),
-which runs `sync_repo.sh` on a GitHub runner.
+It rebuilds the per-EL images purely from the `rpm-*` tags, so any RPM that was
+missing from an image returns. Prefer running it on a runner: trigger the
+**`rebuild-latest`** workflow from the GitHub UI (**Actions → rebuild-latest →
+Run workflow**), which runs `sync_repo.sh` on a GitHub runner.
 
 ### List RPMs
 
@@ -96,68 +96,65 @@ which runs `sync_repo.sh` on a GitHub runner.
 
 ## How it works
 
-Each package's RPM(s) are stored as their own **tag** on the `rpm-repo` package:
-`ghcr.io/gemini-rtsw/rpm-repo:rpm-<pkgname>` — a tiny `FROM scratch` image
-containing just that package's `.rpm` files. The served yum repo lives in the
-`:latest` tag.
+**Every RPM is stored as its own tag** on the `rpm-repo` package:
+`ghcr.io/gemini-rtsw/rpm-repo:rpm-<NVRA>` — a tiny `FROM scratch` image holding
+exactly that one `.rpm`. The tag key is the RPM's full identity (Name-Version-
+Release-Arch, i.e. its filename), so a new version is a **new** tag: tags ADD and
+never overwrite. The scratch tags are the **single, durable source of truth** —
+for built RPMs and for irreplaceable grandfathered ones alike.
 
-Publishing is split into two responsibilities:
-
-**1. Register (`upload-rpm.sh`).** Packs the given RPM(s) into a `FROM scratch`
-image and pushes it as `rpm-repo:rpm-<pkgname>-el<N>`. The tag is keyed by
-**package name + EL** (no version/hash), so re-publishing a package
-**overwrites** its tag — one current RPM image per package per EL. The el8 and
-el9 builds of the same package use different tags, so they never collide. This
-step is race-free.
-
-**2. Publish (`sync_repo.sh`).** The **single writer** of the served images. It:
-- lists every `rpm-*` scratch tag, pulls each, and copies the RPMs into `./rpms`
-  (so `./rpms` holds the latest of every package per EL);
-- folds in the RPMs already in the previous images (**preserving
-  older/manually-added versions** — we build against older versions too);
-- runs `createrepo_c`, buckets the RPMs into stable layers, and pushes **three**
-  images. nginx in each serves over HTTP on port 8080.
-
-**Two published images (per-EL split):**
+The served yum images are pure derived artifacts, rebuilt from the tags:
 
 | Tag | Contents | Who pulls it |
 |-----|----------|--------------|
 | `:latest-el8` | only `.el8` RPMs (~half size) | EL8 builds |
 | `:latest-el9` | only `.el9` RPMs (~half size) | EL9 builds |
 
-The per-EL images exist because each CI runner only builds one EL and pulling
-the full ~6GB combined repo overflowed the runner disk (RTEMS cross-compiles
-are large). A runner now pulls only its EL's image. `build_rpm.sh`/
-`build_docker.sh` default to `:latest-el${EL_VERSION}` (override with the
-`RPM_REPO_IMAGE` env var). Each image has its own anti-truncation guard.
+Publishing is two responsibilities:
 
-The old combined `:latest` is **no longer maintained** (`sync_repo.sh` stopped
-rebuilding it once all consumers moved to per-EL tags).
+**1. Register (`upload-rpm.sh`).** Each given RPM is packed into a `FROM scratch`
+image and pushed as `rpm-<NVRA>`. Unique key per artifact → no overwrite, no EL
+collision, no race. (`--tag-only` stops here; the publish runs separately.)
 
-Because `sync_repo.sh` rebuilds from the **full scratch-tag set**, running it at
-any time reconstructs the complete repo — which is why it doubles as the heal
-command above.
+**2. Publish (`sync_repo.sh`).** Lists every `rpm-*` tag, pulls each (in
+parallel), sorts by EL, runs `createrepo_c`, buckets into stable layers, and
+pushes `:latest-el8` / `:latest-el9`. It does **not** pull the existing images
+to merge into — it rebuilds them **purely from the tag set**. nginx serves each
+over HTTP on port 8080.
 
-### The publish race, and how the split contains it
+### Why pure-from-tags
 
-The scratch-tag push (step 1) is race-free. The `:latest` rebuild (step 2) is a
-read-modify-write on one shared mutable tag, so two publishes running at once
-can clobber each other (last writer wins).
+- **No 6GB base pull** at publish — only the tiny per-RPM tags. Faster, and it
+  fits the runner disk.
+- **No read-modify-write, so no race.** A rebuild deterministically reconstructs
+  the full repo from the tags; two concurrent publishes converge to the same
+  result. (The old model merged into a shared mutable image, which could clobber.)
+- **Any single RPM is retrievable** without pulling the whole repo — just pull
+  its `rpm-<NVRA>` tag.
 
-- **Within one repo's el8/el9 matrix:** each build leg runs step 1 only
-  (`--tag-only`), and step 2 runs **once** as a final `publish` job that
-  `needs:` the whole matrix — so it fires after BOTH el8 and el9 finish. One
-  writer, no race. This is the case that previously dropped RPMs (e.g. rtems
-  el9); it is now fixed. (The publish shows up as the final job in the repo's
-  Actions run.)
-- **Across different repos publishing simultaneously:** still possible to race
-  on `:latest`. **But no RPM is ever lost** — the loser's RPMs survive in their
-  scratch tags, and the next `sync_repo.sh` (any publish, or a manual
-  `rebuild-latest`) re-merges them. A clobbered RPM is at worst *briefly*
-  absent from `:latest`.
+### Safety: never lose an RPM
 
-Tags **add/overwrite but never remove**; the `:latest` merge + scratch tags are
-what retain history.
+The tags are the *only* source, so a missing tag would mean a missing RPM. Two
+guards protect the irreplaceable grandfathered RPMs:
+
+1. **Tag-pull completeness.** Each tag holds one RPM, so the number of RPMs
+   extracted must equal the number of tags. A shortfall (a failed pull) aborts
+   the publish — it never ships an incomplete repo.
+2. **Anti-truncation.** Each publish records its per-EL RPM count in a tiny
+   `rpm-count-el<N>` marker tag. The next publish refuses to push an image with
+   **fewer** RPMs than that — a shrink fails loudly instead of silently dropping
+   RPMs.
+
+GHCR has no practical total-size cap, so accumulating tags is fine; old NVRs
+stay retrievable. (Tag-count growth is unbounded by design; a retention policy
+can prune unreferenced dev NVRs later — release pins protect what matters.)
+
+### One-time migration
+
+`backfill-tags.sh` seeds the model: it reads every RPM out of the current
+`:latest-el8` / `:latest-el9` images (including grandfathered ones) and pushes
+each as a per-NVRA tag, then verifies the tag count matches. Run once; after
+that the tags are complete and `sync_repo.sh` is safe to run pure-from-tags.
 
 ## Requirements
 
@@ -171,8 +168,9 @@ For other repos in the org to pull the `ghcr.io/gemini-rtsw/rpm-repo` container 
 1. Go to the package settings: **github.com/orgs/gemini-rtsw/packages/container/rpm-repo/settings**
 2. Under **Manage Actions access**, add each repo that needs access
 3. Set the role to:
-   - **Read** for repos that only pull `:latest` (consume the yum repo), or
+   - **Read** for repos that only pull `:latest-el8`/`:latest-el9` (consume the
+     yum repo), or
    - **Write** for project repos whose CI publishes via `upload-rpm.sh` (they
-     push their `rpm-*` tag and rebuild `:latest`)
+     push their `rpm-<NVRA>` tags and rebuild the per-EL images)
 
 Tag listing and pulling use the workflow's `GITHUB_TOKEN` — no PAT is required.

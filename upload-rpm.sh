@@ -51,47 +51,37 @@ for f in "$@"; do
     [ -f "$f" ] || { echo "ERROR: not a file: $f" >&2; exit 1; }
 done
 
-# --- 1. Push the uploaded RPM(s) as a per-package scratch image tag ---------
-# Key the tag off the "primary" package name: prefer the first non-devel RPM,
-# else just the first. Strip any -devel suffix so foo + foo-devel share one tag.
-primary=""
-for f in "$@"; do
-    name=$(rpm -qp --queryformat '%{NAME}' "$f" 2>/dev/null)
-    case "$name" in
-        *-devel) [ -z "$primary" ] && primary="${name%-devel}" ;;
-        *) primary="$name"; break ;;
-    esac
-done
-[ -n "$primary" ] || { echo "ERROR: could not determine package name" >&2; exit 1; }
-# Scope the scratch tag by EL (.el8/.el9/...) so the el8 and el9 builds of the
-# SAME package don't collide on one tag and clobber each other. Derive the EL
-# from the RPM Release (dist tag).
-eltag=$(rpm -qp --queryformat '%{RELEASE}' "$1" 2>/dev/null | grep -oE 'el[0-9]+' | head -1)
-[ -n "$eltag" ] || eltag="noel"
-TAG="rpm-${primary}-${eltag}"
+. "$SCRIPT_DIR/tag-lib.sh"
 
-echo "1. Pushing scratch image ${RPM_REPO_IMAGE}:${TAG} with $# RPM(s)..."
-STAGE=$(mktemp -d)
-trap 'rm -rf "$STAGE"' EXIT
-cp "$@" "$STAGE/"
-cat > "$STAGE/Dockerfile" <<'EOF'
+# --- 1. Push EACH RPM as its own per-NVR scratch tag -----------------------
+# One tag per RPM file (keyed on its NVRA filename via rpm_tag_for). Because the
+# key is unique per built artifact, a new version is a new tag -- tags ADD and
+# never overwrite, so nothing is ever clobbered (no race, no EL collision).
+for f in "$@"; do
+    TAG=$(rpm_tag_for "$f")
+    echo "1. Pushing ${RPM_REPO_IMAGE}:${TAG}  ($(basename "$f"))"
+    STAGE=$(mktemp -d)
+    cp "$f" "$STAGE/"
+    cat > "$STAGE/Dockerfile" <<'EOF'
 FROM scratch
 COPY *.rpm /
 EOF
-docker build -t "${RPM_REPO_IMAGE}:${TAG}" "$STAGE"
-docker push "${RPM_REPO_IMAGE}:${TAG}"
-echo "   pushed ${RPM_REPO_IMAGE}:${TAG}"
+    docker build -t "${RPM_REPO_IMAGE}:${TAG}" "$STAGE"
+    docker push "${RPM_REPO_IMAGE}:${TAG}"
+    rm -rf "$STAGE"
+    echo "   pushed ${RPM_REPO_IMAGE}:${TAG}"
+done
 
-# --- 2. Publish (rebuild :latest), unless --tag-only -----------------------
-# sync_repo.sh is the single writer of :latest. It pulls EVERY rpm-* tag (incl.
-# the one just pushed) + the old :latest, so it always reflects the full set.
-# In CI, build legs pass --tag-only (push tag, no publish) and a separate
-# publish job runs sync_repo.sh once -- avoiding the concurrent :latest race.
+# --- 2. Publish (rebuild per-EL images), unless --tag-only -----------------
+# sync_repo.sh rebuilds :latest-el8 / :latest-el9 PURELY from the rpm-* tags --
+# the tags are the source of truth, so a rebuild always reflects the full set.
+# In CI, build legs pass --tag-only (push tags, no publish) and a separate
+# publish job runs sync_repo.sh once.
 if [ "$TAG_ONLY" -eq 1 ]; then
-    echo "2. --tag-only: skipping :latest rebuild (a later sync_repo.sh will publish)."
+    echo "2. --tag-only: skipping image rebuild (a later sync_repo.sh will publish)."
     exit 0
 fi
 
-echo "2. Handing off to sync_repo.sh to rebuild and push :latest..."
+echo "2. Handing off to sync_repo.sh to rebuild and push the per-EL images..."
 chmod +x "$SCRIPT_DIR/sync_repo.sh"
 "$SCRIPT_DIR/sync_repo.sh"
