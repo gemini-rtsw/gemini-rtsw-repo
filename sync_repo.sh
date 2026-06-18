@@ -167,13 +167,22 @@ build_one() {
     local bdir="./build-${tag}"
     rm -rf "$bdir"; mkdir -p "$bdir"
 
+    # An RPM belongs in this EL's image if its filename carries this EL's dist
+    # tag (.el8. / .el9.) OR carries NO el dist tag at all. The latter covers
+    # grandfathered/external EL-agnostic RPMs (e.g. gemini-ade-2.2-...x86_64.rpm,
+    # noarch tools) that must appear in BOTH images -- otherwise the EL filter
+    # silently drops them from the served repos.
     local n=0
     for rpm in "$RPM_DIR"/*.rpm; do
         [ -f "$rpm" ] || continue
         local bn; bn=$(basename "$rpm")
-        case "$bn" in *"$filter"*) cp "$rpm" "$bdir/"; n=$((n+1)) ;; esac
+        case "$bn" in
+            *"$filter"*) cp "$rpm" "$bdir/"; n=$((n+1)) ;;       # this EL
+            *.el[0-9]*) : ;;                                      # a DIFFERENT EL -> skip
+            *) cp "$rpm" "$bdir/"; n=$((n+1)) ;;                  # no EL tag -> both images
+        esac
     done
-    echo "[$tag] $n RPM(s) match filter '$filter'"
+    echo "[$tag] $n RPM(s) for filter '$filter' (incl. EL-agnostic)"
     if [ "$n" -eq 0 ]; then
         echo "[$tag] no RPMs match; skipping."
         rm -rf "$bdir"; return 0
