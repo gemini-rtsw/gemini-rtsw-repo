@@ -92,23 +92,29 @@ fi
 # Parallelised: each scratch image is tiny, but there are hundreds. set -e makes
 # any pull failure fatal (we must never silently drop an irreplaceable RPM).
 echo "2. Pulling $TAG_COUNT tags into $RPM_DIR ..."
+PROGRESS_FILE=$(mktemp)
+echo 0 > "$PROGRESS_FILE"
 pull_one() {
     local t="$1"
     docker pull -q "${RPM_REPO_IMAGE}:${t}" >/dev/null
     local cid; cid=$(docker create "${RPM_REPO_IMAGE}:${t}" x)
     docker cp "${cid}:/." "$RPM_DIR/" >/dev/null 2>&1 || true
     docker rm "$cid" >/dev/null
+    # Progress: bump a shared counter, print every 25 tags so the log shows
+    # the pull is advancing (otherwise it looks hung for many minutes).
+    local n
+    n=$(( $(cat "$PROGRESS_FILE") + 1 ))
+    echo "$n" > "$PROGRESS_FILE"
+    if [ $((n % 25)) -eq 0 ]; then echo "   ... pulled $n/$TAG_COUNT tags"; fi
 }
 export -f pull_one
-export RPM_REPO_IMAGE RPM_DIR
+export RPM_REPO_IMAGE RPM_DIR PROGRESS_FILE TAG_COUNT
 # xargs -P for concurrency. A pull failure would silently drop an RPM, so we
-# guard below. NOTE: we do NOT require EXTRACTED == TAG_COUNT. New per-NVRA tags
-# hold exactly one RPM, but LEGACY per-package tags (rpm-<pkg>-el<N>, from before
-# this model) may hold 1-2 RPMs AND overlap with the per-NVRA tags -- extraction
-# dedups by filename, so EXTRACTED can legitimately be < TAG_COUNT during the
-# transition. The real safety net is the per-EL anti-truncation marker in
-# build_one (never publish fewer RPMs than last time).
-printf '%s\n' $rpm_tags | xargs -P 8 -I{} bash -c 'pull_one "$@"' _ {}
+# guard below. NOTE: we do NOT require EXTRACTED == TAG_COUNT. Legacy per-package
+# tags may hold overlapping RPMs (dedup'd on extraction), so EXTRACTED can be <
+# TAG_COUNT. The real safety net is the per-EL anti-truncation marker.
+printf '%s\n' $rpm_tags | xargs -P 16 -I{} bash -c 'pull_one "$@"' _ {}
+rm -f "$PROGRESS_FILE"
 find "$RPM_DIR" -type f ! -name '*.rpm' -delete 2>/dev/null || true
 EXTRACTED=$(find "$RPM_DIR" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')
 echo "   extracted $EXTRACTED distinct RPM(s) from $TAG_COUNT tag(s)"
