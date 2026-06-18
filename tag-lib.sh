@@ -32,3 +32,28 @@ rpm_tag_for() {
 rpm_el_for() {
     rpm -qp --queryformat '%{RELEASE}' "$1" 2>/dev/null | grep -oE 'el[0-9]+' | head -1 || true
 }
+
+# docker_push_retry <image:tag> -- push with a per-attempt timeout and retries.
+# A plain `docker push` has NO timeout: a stalled large-blob upload (e.g. the
+# ~553MB epics-base RPM) hangs forever. Here each attempt is bounded by
+# DOCKER_PUSH_TIMEOUT (default 600s); a stall is killed and retried up to
+# DOCKER_PUSH_RETRIES (default 4) times with backoff. Returns non-zero only if
+# every attempt fails -- so the caller (set -e) still fails loudly on a genuine
+# problem, but survives transient registry stalls.
+DOCKER_PUSH_TIMEOUT="${DOCKER_PUSH_TIMEOUT:-600}"
+DOCKER_PUSH_RETRIES="${DOCKER_PUSH_RETRIES:-4}"
+docker_push_retry() {
+    local ref="$1" attempt=1 rc
+    while [ "$attempt" -le "$DOCKER_PUSH_RETRIES" ]; do
+        if timeout "$DOCKER_PUSH_TIMEOUT" docker push "$ref"; then
+            return 0
+        fi
+        rc=$?
+        echo "  push attempt $attempt/$DOCKER_PUSH_RETRIES failed (rc=$rc) for $ref" >&2
+        # rc 124 == timeout fired. Either way, back off and retry.
+        attempt=$((attempt + 1))
+        sleep $((attempt * 5))
+    done
+    echo "ERROR: docker push failed after $DOCKER_PUSH_RETRIES attempts: $ref" >&2
+    return 1
+}

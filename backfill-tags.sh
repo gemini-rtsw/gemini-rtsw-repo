@@ -37,7 +37,7 @@ write_count_marker() {
     : > "$sdir/${n}.count"
     printf 'FROM scratch\nCOPY *.count /\n' > "$sdir/Dockerfile"
     docker build -t "$RPM_REPO_IMAGE:rpm-count-${tag}" "$sdir" >/dev/null
-    docker push "$RPM_REPO_IMAGE:rpm-count-${tag}" >/dev/null
+    docker_push_retry "$RPM_REPO_IMAGE:rpm-count-${tag}" >/dev/null
     rm -rf "$sdir"
     echo "  wrote anti-truncation marker rpm-count-${tag} = $n"
 }
@@ -71,7 +71,7 @@ for tag in latest-el8 latest-el9; do
         cp "$rpm" "$sdir/"
         printf 'FROM scratch\nCOPY *.rpm /\n' > "$sdir/Dockerfile"
         docker build -t "$RPM_REPO_IMAGE:$t" "$sdir" >/dev/null
-        docker push "$RPM_REPO_IMAGE:$t" >/dev/null
+        docker_push_retry "$RPM_REPO_IMAGE:$t" >/dev/null
         rm -rf "$sdir"
         total_pushed=$((total_pushed + 1))
         echo "  [$total_pushed] $t"

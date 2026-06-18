@@ -53,21 +53,29 @@ if [ -z "$bearer" ]; then
     exit 1
 fi
 
-# Follow pagination via the Link: rel="next" header.
-url="https://ghcr.io/v2/gemini-rtsw/rpm-repo/tags/list?n=100"
+# Paginate with an explicit cursor instead of parsing the Link: header.
+# The registry returns up to PAGE_SIZE tags per request and accepts ?last=<tag>
+# to continue after the last tag seen. We loop until a page returns fewer than
+# PAGE_SIZE tags (the final page). This does not depend on the exact Link-header
+# format, so it cannot silently stop early -- critical now that there are 600+
+# tags across several pages (a missed page = dropped RPMs).
+PAGE_SIZE=100
 tags=""
-while [ -n "$url" ]; do
-    hdrs=$(mktemp)
-    body=$(curl -s -D "$hdrs" -H "Authorization: Bearer $bearer" "$url")
-    page=$(printf '%s' "$body" | python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(d.get('tags') or []))" 2>/dev/null || true)
-    tags="${tags}${page}"$'\n'
-    next=$(sed -n 's/.*<\([^>]*\)>; *rel="next".*/\1/Ip' "$hdrs" || true)
-    rm -f "$hdrs"
-    if [ -n "$next" ]; then
-        case "$next" in /*) url="https://ghcr.io${next}" ;; *) url="$next" ;; esac
+last=""
+while :; do
+    if [ -z "$last" ]; then
+        url="https://ghcr.io/v2/gemini-rtsw/rpm-repo/tags/list?n=${PAGE_SIZE}"
     else
-        url=""
+        url="https://ghcr.io/v2/gemini-rtsw/rpm-repo/tags/list?n=${PAGE_SIZE}&last=${last}"
     fi
+    body=$(curl -s -H "Authorization: Bearer $bearer" "$url")
+    page=$(printf '%s' "$body" | python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(d.get('tags') or []))" 2>/dev/null || true)
+    count=$(printf '%s\n' "$page" | grep -c . || true)
+    [ "$count" -eq 0 ] && break
+    tags="${tags}${page}"$'\n'
+    last=$(printf '%s\n' "$page" | grep . | tail -1)
+    # Last page returns fewer than a full page -> done.
+    [ "$count" -lt "$PAGE_SIZE" ] && break
 done
 
 # Only the per-RPM tags (rpm-...), excluding the count-marker tags.
@@ -141,7 +149,7 @@ write_count_marker() {
     : > "$sdir/${n}.count"
     printf 'FROM scratch\nCOPY *.count /\n' > "$sdir/Dockerfile"
     docker build -t "$RPM_REPO_IMAGE:rpm-count-${tag}" "$sdir" >/dev/null
-    docker push "$RPM_REPO_IMAGE:rpm-count-${tag}" >/dev/null
+    docker_push_retry "$RPM_REPO_IMAGE:rpm-count-${tag}" >/dev/null
     rm -rf "$sdir"
 }
 
@@ -195,7 +203,7 @@ build_one() {
     docker build -f "$SCRIPT_DIR/Dockerfile.rpm-repo" \
         --build-arg NUM_BUCKETS=$NUM_BUCKETS \
         -t "$RPM_REPO_IMAGE:$tag" "$SCRIPT_DIR"
-    docker push "$RPM_REPO_IMAGE:$tag"
+    docker_push_retry "$RPM_REPO_IMAGE:$tag"
     rm -rf "$BUILD_DIR"
 
     # Record the new count (after a successful push) for next run's guard.

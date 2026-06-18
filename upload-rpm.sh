@@ -67,7 +67,7 @@ FROM scratch
 COPY *.rpm /
 EOF
     docker build -t "${RPM_REPO_IMAGE}:${TAG}" "$STAGE"
-    docker push "${RPM_REPO_IMAGE}:${TAG}"
+    docker_push_retry "${RPM_REPO_IMAGE}:${TAG}"
     rm -rf "$STAGE"
     echo "   pushed ${RPM_REPO_IMAGE}:${TAG}"
 done
