@@ -93,27 +93,32 @@ fi
 # any pull failure fatal (we must never silently drop an irreplaceable RPM).
 echo "2. Pulling $TAG_COUNT tags into $RPM_DIR ..."
 PROGRESS_FILE=$(mktemp)
-echo 0 > "$PROGRESS_FILE"
 pull_one() {
     local t="$1"
     docker pull -q "${RPM_REPO_IMAGE}:${t}" >/dev/null
     local cid; cid=$(docker create "${RPM_REPO_IMAGE}:${t}" x)
     docker cp "${cid}:/." "$RPM_DIR/" >/dev/null 2>&1 || true
     docker rm "$cid" >/dev/null
-    # Progress: bump a shared counter, print every 25 tags so the log shows
-    # the pull is advancing (otherwise it looks hung for many minutes).
-    local n
-    n=$(( $(cat "$PROGRESS_FILE") + 1 ))
-    echo "$n" > "$PROGRESS_FILE"
-    if [ $((n % 25)) -eq 0 ]; then echo "   ... pulled $n/$TAG_COUNT tags"; fi
+    # Progress: append one line (atomic, no read-modify-write -> race-safe).
+    # The main shell counts lines below to report progress.
+    echo . >> "$PROGRESS_FILE"
 }
 export -f pull_one
-export RPM_REPO_IMAGE RPM_DIR PROGRESS_FILE TAG_COUNT
+export RPM_REPO_IMAGE RPM_DIR PROGRESS_FILE
 # xargs -P for concurrency. A pull failure would silently drop an RPM, so we
 # guard below. NOTE: we do NOT require EXTRACTED == TAG_COUNT. Legacy per-package
 # tags may hold overlapping RPMs (dedup'd on extraction), so EXTRACTED can be <
 # TAG_COUNT. The real safety net is the per-EL anti-truncation marker.
-printf '%s\n' $rpm_tags | xargs -P 16 -I{} bash -c 'pull_one "$@"' _ {}
+# Run the parallel pulls in the background; the main shell prints progress by
+# counting lines in PROGRESS_FILE (workers append one line each, race-safe).
+printf '%s\n' $rpm_tags | xargs -P 16 -I{} bash -c 'pull_one "$@"' _ {} &
+xargs_pid=$!
+while kill -0 "$xargs_pid" 2>/dev/null; do
+    sleep 10
+    done_n=$(wc -l < "$PROGRESS_FILE" 2>/dev/null | tr -d ' '); done_n=${done_n:-0}
+    echo "   ... pulled $done_n/$TAG_COUNT tags"
+done
+wait "$xargs_pid"
 rm -f "$PROGRESS_FILE"
 find "$RPM_DIR" -type f ! -name '*.rpm' -delete 2>/dev/null || true
 EXTRACTED=$(find "$RPM_DIR" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')
