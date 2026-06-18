@@ -28,6 +28,7 @@ trap cleanup EXIT
 
 total_in_images=0
 total_pushed=0
+total_present=0   # tags confirmed present (existing skipped + newly pushed)
 
 # write_count_marker TAG N -- record an image's RPM count as a tiny tag, so
 # sync_repo.sh's anti-truncation guard has a floor from the very first publish.
@@ -67,6 +68,12 @@ for tag in latest-el8 latest-el9; do
     while IFS= read -r rpm; do
         [ -n "$rpm" ] || continue
         t=$(rpm_tag_for "$rpm")
+        # Skip tags that already exist -- a registry-only check, no build/push.
+        # Makes re-runs take seconds (only genuinely missing tags do work).
+        total_present=$((total_present + 1))
+        if tag_exists "$RPM_REPO_IMAGE:$t"; then
+            continue
+        fi
         sdir=$(mktemp -d)
         cp "$rpm" "$sdir/"
         printf 'FROM scratch\nCOPY *.rpm /\n' > "$sdir/Dockerfile"
@@ -74,7 +81,7 @@ for tag in latest-el8 latest-el9; do
         docker_push_retry "$RPM_REPO_IMAGE:$t" >/dev/null
         rm -rf "$sdir"
         total_pushed=$((total_pushed + 1))
-        echo "  [$total_pushed] $t"
+        echo "  pushed missing: $t"
     done < <(find "$dir" -maxdepth 1 -name '*.rpm' | sort)
 
     # Seed the anti-truncation floor for this image at its current full count,
@@ -85,13 +92,12 @@ done
 echo ""
 echo "================ BACKFILL SUMMARY ================"
 echo "RPMs found in source images : $total_in_images"
-echo "Scratch tags pushed         : $total_pushed"
-# Note: a built RPM that exists in BOTH el8 and el9 has different filenames
-# (.el8 vs .el9) so it is two tags; identical-named RPMs across images would
-# collapse to one tag (idempotent). total_pushed >= distinct NVRAs is expected.
-if [ "$total_pushed" -lt "$total_in_images" ]; then
-    echo "WARNING: pushed fewer tags than RPMs found -- investigate before relying" >&2
-    echo "         on pure-from-tags publishing." >&2
+echo "Tags newly pushed (missing) : $total_pushed"
+echo "Tags present (skipped+pushed): $total_present"
+# Every RPM in the images must have a tag (existing or just pushed). Re-runs
+# mostly skip; only genuinely missing tags are pushed.
+if [ "$total_present" -lt "$total_in_images" ]; then
+    echo "WARNING: $((total_in_images - total_present)) RPM(s) still lack a tag." >&2
     exit 1
 fi
 echo "OK: every RPM in the served images now has a scratch tag."

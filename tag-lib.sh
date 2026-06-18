@@ -40,6 +40,14 @@ rpm_el_for() {
 # DOCKER_PUSH_RETRIES (default 4) times with backoff. Returns non-zero only if
 # every attempt fails -- so the caller (set -e) still fails loudly on a genuine
 # problem, but survives transient registry stalls.
+# tag_exists <image:tag> -- true if the tag already exists in the registry.
+# Uses `docker manifest inspect`, which queries the registry WITHOUT pulling the
+# image (no build, no layer download). Lets backfill skip already-present tags
+# cheaply so a re-run only does work for genuinely missing tags.
+tag_exists() {
+    docker manifest inspect "$1" >/dev/null 2>&1
+}
+
 DOCKER_PUSH_TIMEOUT="${DOCKER_PUSH_TIMEOUT:-600}"
 DOCKER_PUSH_RETRIES="${DOCKER_PUSH_RETRIES:-4}"
 docker_push_retry() {
