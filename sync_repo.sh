@@ -167,22 +167,50 @@ build_one() {
     local bdir="./build-${tag}"
     rm -rf "$bdir"; mkdir -p "$bdir"
 
-    # An RPM belongs in this EL's image if its filename carries this EL's dist
-    # tag (.el8. / .el9.) OR carries NO el dist tag at all. The latter covers
-    # grandfathered/external EL-agnostic RPMs (e.g. gemini-ade-2.2-...x86_64.rpm,
-    # noarch tools) that must appear in BOTH images -- otherwise the EL filter
-    # silently drops them from the served repos.
+    # Selection rule (per package): if BOTH an el8 and el9 build of a package
+    # exist, split them (each to its own image). OTHERWISE the RPM goes into
+    # BOTH images. This covers:
+    #   - true per-EL pairs (bancomm.el8 + bancomm.el9) -> split, no duplication
+    #   - el8-only build tools with no el9 counterpart (tdct.el8) -> into both,
+    #     so el9 builds can still resolve them (mimics the old combined repo)
+    #   - EL-agnostic RPMs with no dist tag (gemini-ade) -> into both
+    # It is self-correcting: once an el9 build of a package appears, its el8
+    # copy stops being copied into el9. No human classification, no lost RPMs.
+    #
+    # "this EL" is derived from the filter (.el8. -> el8, .el9. -> el9).
+    local this_el; this_el=$(printf '%s' "$filter" | tr -d '.')   # el8 / el9
+    local other_el; case "$this_el" in el8) other_el=el9 ;; el9) other_el=el8 ;; *) other_el="" ;; esac
+
+    # Build a set of package "keys" (filename with the .elN stripped) that have
+    # a THIS-EL build. A different-EL RPM is excluded only if its key is in here.
+    local keyfile; keyfile=$(mktemp)
+    for rpm in "$RPM_DIR"/*.rpm; do
+        [ -f "$rpm" ] || continue
+        local b; b=$(basename "$rpm")
+        case "$b" in
+            *".${this_el}."*) printf '%s\n' "$(printf '%s' "$b" | sed "s/\.${this_el}\././")" ;;
+        esac
+    done | sort -u > "$keyfile"
+
     local n=0
     for rpm in "$RPM_DIR"/*.rpm; do
         [ -f "$rpm" ] || continue
         local bn; bn=$(basename "$rpm")
         case "$bn" in
-            *"$filter"*) cp "$rpm" "$bdir/"; n=$((n+1)) ;;       # this EL
-            *.el[0-9]*) : ;;                                      # a DIFFERENT EL -> skip
-            *) cp "$rpm" "$bdir/"; n=$((n+1)) ;;                  # no EL tag -> both images
+            *".${this_el}."*)
+                cp "$rpm" "$bdir/"; n=$((n+1)) ;;                 # this EL -> include
+            *.el[0-9]*)
+                # Different EL. Include ONLY if no this-EL version of this
+                # package exists (i.e. it is the sole build -> needed by both).
+                local key; key=$(printf '%s' "$bn" | sed -E "s/\.el[0-9]+\././")
+                if grep -qxF "$key" "$keyfile"; then : ;          # this-EL exists -> skip
+                else cp "$rpm" "$bdir/"; n=$((n+1)); fi ;;
+            *)
+                cp "$rpm" "$bdir/"; n=$((n+1)) ;;                 # no EL tag -> both
         esac
     done
-    echo "[$tag] $n RPM(s) for filter '$filter' (incl. EL-agnostic)"
+    rm -f "$keyfile"
+    echo "[$tag] $n RPM(s) for filter '$filter' (this-EL + sole-build other-EL + agnostic)"
     if [ "$n" -eq 0 ]; then
         echo "[$tag] no RPMs match; skipping."
         rm -rf "$bdir"; return 0
