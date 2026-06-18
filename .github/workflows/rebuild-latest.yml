@@ -1,15 +1,13 @@
 name: rebuild-latest
 
-# Manually rebuild rpm-repo:latest from all rpm-* scratch tags.
-#
-# Use this to HEAL :latest when a package is present as a scratch tag but
-# missing from :latest -- e.g. after two matrix legs raced on the :latest
-# rebuild and the loser's RPM got clobbered (it survives in its scratch tag,
-# and this job re-merges it). No package rebuild needed.
+# Manually rebuild the per-EL yum images (rpm-repo:latest-el8 / :latest-el9)
+# from all rpm-* scratch tags. Use this to HEAL the images, or after backfill.
 #
 # Trigger from the GitHub UI: Actions -> rebuild-latest -> Run workflow.
-# Runs on a GitHub runner, so it does NOT use your local bandwidth (:latest is
-# ~6GB to pull/push).
+#
+# el8 and el9 run as SEPARATE matrix jobs (separate runners), so each runner
+# only ever assembles ONE multi-GB image on its own fresh ~70GB disk -- this
+# avoids the disk overflow that hit when both were built on one runner.
 
 on:
   workflow_dispatch:
@@ -20,20 +18,28 @@ permissions:
 
 jobs:
   rebuild:
-    name: Rebuild rpm-repo:latest from scratch tags
+    name: Rebuild :latest-el${{ matrix.el }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        el: ['8', '9']
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # sync_repo.sh pulls the ~6GB :latest + all scratch tags and rebuilds --
-      # free the runner disk first so it doesn't hit "No space left on device".
+      # Aggressively reclaim runner disk (~30-40GB) before pulling tags and
+      # building a multi-GB image. The build context alone is several GB.
       - name: Free up disk space
-        run: |
-          sudo rm -rf /opt/hostedtoolcache /usr/local/lib/android \
-            /usr/share/dotnet /usr/local/.ghcup /opt/ghc \
-            /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
-          df -h /
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -42,11 +48,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Rebuild and push :latest
+      - name: Rebuild and push :latest-el${{ matrix.el }}
         env:
-          # sync_repo.sh uses these to list rpm-* tags via the GHCR API.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
         run: |
+          df -h /
           chmod +x sync_repo.sh
-          ./sync_repo.sh
+          ./sync_repo.sh ${{ matrix.el }}

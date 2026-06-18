@@ -279,8 +279,17 @@ build_one() {
 }
 
 SUMMARY_FILE=$(mktemp)
-build_one "latest-el8" ".el8."
-build_one "latest-el9" ".el9."
+# Optional arg: build only one EL (8 or 9). No arg = both. Building a single EL
+# per invocation lets CI run el8 and el9 on SEPARATE runners, so each runner
+# only ever assembles ONE ~multi-GB image (its own fresh ~70GB disk) instead of
+# both sequentially -- avoiding the runner-disk overflow.
+ONLY_EL="${1:-}"
+case "$ONLY_EL" in
+    8)  build_one "latest-el8" ".el8." ;;
+    9)  build_one "latest-el9" ".el9." ;;
+    "") build_one "latest-el8" ".el8."; build_one "latest-el9" ".el9." ;;
+    *)  echo "ERROR: arg must be 8, 9, or empty (got '$ONLY_EL')" >&2; exit 1 ;;
+esac
 
 echo ""
 echo "================ PUBLISH SUMMARY ================"
