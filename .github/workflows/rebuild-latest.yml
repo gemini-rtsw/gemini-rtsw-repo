@@ -1,13 +1,9 @@
 name: rebuild-latest
 
-# Manually rebuild the per-EL yum images (rpm-repo:latest-el8 / :latest-el9)
-# from all rpm-* scratch tags. Use this to HEAL the images, or after backfill.
+# Manually rebuild the combined yum image (rpm-repo:latest) from all rpm-*
+# scratch tags. Use this to HEAL the image, or after backfill.
 #
 # Trigger from the GitHub UI: Actions -> rebuild-latest -> Run workflow.
-#
-# el8 and el9 run as SEPARATE matrix jobs (separate runners), so each runner
-# only ever assembles ONE multi-GB image on its own fresh ~70GB disk -- this
-# avoids the disk overflow that hit when both were built on one runner.
 
 on:
   workflow_dispatch:
@@ -18,18 +14,14 @@ permissions:
 
 jobs:
   rebuild:
-    name: Rebuild :latest-el${{ matrix.el }}
+    name: Rebuild rpm-repo:latest
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        el: ['8', '9']
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # Aggressively reclaim runner disk (~30-40GB) before pulling tags and
-      # building a multi-GB image. The build context alone is several GB.
+      # building the multi-GB image (build context + overlay).
       - name: Free up disk space
         uses: jlumbroso/free-disk-space@main
         with:
@@ -48,11 +40,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Rebuild and push :latest-el${{ matrix.el }}
+      - name: Rebuild and push :latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
         run: |
           df -h /
           chmod +x sync_repo.sh
-          ./sync_repo.sh ${{ matrix.el }}
+          ./sync_repo.sh

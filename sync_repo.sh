@@ -172,22 +172,24 @@ build_one() {
     local bdir="./build-${tag}"
     rm -rf "$bdir"; mkdir -p "$bdir"
 
-    # Selection rule (per package): if BOTH an el8 and el9 build of a package
-    # exist, split them (each to its own image). OTHERWISE the RPM goes into
-    # BOTH images. This covers:
-    #   - true per-EL pairs (bancomm.el8 + bancomm.el9) -> split, no duplication
-    #   - el8-only build tools with no el9 counterpart (tdct.el8) -> into both,
-    #     so el9 builds can still resolve them (mimics the old combined repo)
-    #   - EL-agnostic RPMs with no dist tag (gemini-ade) -> into both
-    # It is self-correcting: once an el9 build of a package appears, its el8
-    # copy stops being copied into el9. No human classification, no lost RPMs.
-    #
-    # "this EL" is derived from the filter (.el8. -> el8, .el9. -> el9).
+    # SINGLE COMBINED REPO (filter empty): include EVERY RPM. This is the
+    # current operating mode -- one :latest with all RPMs. The per-EL split
+    # (below, when a filter is given) is kept for LATER: at this migration stage
+    # almost every package is el8-only, so a split would put ~everything into
+    # BOTH images (no size win) while doubling build cost. Revisit the split
+    # once el9 has enough real package pairs to actually shrink the images.
+    local n=0
+    if [ -z "$filter" ]; then
+        for rpm in "$RPM_DIR"/*.rpm; do
+            [ -f "$rpm" ] || continue
+            cp "$rpm" "$bdir/"; n=$((n+1))
+        done
+        echo "[$tag] $n RPM(s) (single combined repo -- all RPMs)"
+    else
+    # --- per-EL split path (currently unused; kept for the future) ----------
+    # Rule: if BOTH an el8 and el9 build of a package exist, split them; else
+    # the RPM goes into BOTH images (sole el8 tools + agnostic). Self-correcting.
     local this_el; this_el=$(printf '%s' "$filter" | tr -d '.')   # el8 / el9
-    local other_el; case "$this_el" in el8) other_el=el9 ;; el9) other_el=el8 ;; *) other_el="" ;; esac
-
-    # Build a set of package "keys" (filename with the .elN stripped) that have
-    # a THIS-EL build. A different-EL RPM is excluded only if its key is in here.
     local keyfile; keyfile=$(mktemp)
     for rpm in "$RPM_DIR"/*.rpm; do
         [ -f "$rpm" ] || continue
@@ -196,26 +198,20 @@ build_one() {
             *".${this_el}."*) printf '%s\n' "$(printf '%s' "$b" | sed "s/\.${this_el}\././")" ;;
         esac
     done | sort -u > "$keyfile"
-
-    local n=0
     for rpm in "$RPM_DIR"/*.rpm; do
         [ -f "$rpm" ] || continue
         local bn; bn=$(basename "$rpm")
         case "$bn" in
-            *".${this_el}."*)
-                cp "$rpm" "$bdir/"; n=$((n+1)) ;;                 # this EL -> include
+            *".${this_el}."*) cp "$rpm" "$bdir/"; n=$((n+1)) ;;
             *.el[0-9]*)
-                # Different EL. Include ONLY if no this-EL version of this
-                # package exists (i.e. it is the sole build -> needed by both).
                 local key; key=$(printf '%s' "$bn" | sed -E "s/\.el[0-9]+\././")
-                if grep -qxF "$key" "$keyfile"; then : ;          # this-EL exists -> skip
-                else cp "$rpm" "$bdir/"; n=$((n+1)); fi ;;
-            *)
-                cp "$rpm" "$bdir/"; n=$((n+1)) ;;                 # no EL tag -> both
+                if grep -qxF "$key" "$keyfile"; then : ; else cp "$rpm" "$bdir/"; n=$((n+1)); fi ;;
+            *) cp "$rpm" "$bdir/"; n=$((n+1)) ;;
         esac
     done
     rm -f "$keyfile"
     echo "[$tag] $n RPM(s) for filter '$filter' (this-EL + sole-build other-EL + agnostic)"
+    fi
     if [ "$n" -eq 0 ]; then
         echo "[$tag] no RPMs match; skipping."
         rm -rf "$bdir"; return 0
@@ -260,9 +256,10 @@ build_one() {
     rm -rf "$BUILD_DIR"; mv "$bdir" "$BUILD_DIR"
     # The RPMs now live in $BUILD_DIR (bucketed). $RPM_DIR is a redundant copy of
     # the same multi-GB set; free it before the build so the docker daemon has
-    # headroom for the build context + overlay. Safe because this runner builds
-    # only this one EL (per-EL matrix), so $RPM_DIR is not needed again.
-    if [ -n "$ONLY_EL" ]; then rm -rf "$RPM_DIR"; df -h / 2>/dev/null || true; fi
+    # headroom for the build context + overlay. Safe in combined mode (one image
+    # then done) and in single-EL mode (this runner builds only one EL). Only
+    # the legacy both-EL-in-one-process path would still need it -- not used now.
+    rm -rf "$RPM_DIR"; df -h / 2>/dev/null || true
     docker build -f "$SCRIPT_DIR/Dockerfile.rpm-repo" \
         --build-arg NUM_BUCKETS=$NUM_BUCKETS \
         -t "$RPM_REPO_IMAGE:$tag" "$SCRIPT_DIR"
@@ -284,15 +281,21 @@ build_one() {
 }
 
 SUMMARY_FILE=$(mktemp)
-# Optional arg: build only one EL (8 or 9). No arg = both. Building a single EL
-# per invocation lets CI run el8 and el9 on SEPARATE runners, so each runner
-# only ever assembles ONE ~multi-GB image (its own fresh ~70GB disk) instead of
-# both sequentially -- avoiding the runner-disk overflow.
+# CURRENT MODE: one combined :latest with ALL RPMs (filter empty). The per-EL
+# split is shelved at this migration stage -- almost everything is el8-only, so
+# a split duplicates ~everything into both images (no size win) and doubles
+# build cost. Single is the known-working path; the disk fixes (lean context,
+# hardlinked flat view, freed rpms, aggressive runner cleanup) keep it building
+# comfortably. Re-enable the split (per-EL build_one calls) once el9 has enough
+# package pairs that it actually shrinks the images.
+#
+# ONLY_EL kept for forward-compat / manual single-EL rebuilds, but defaults to
+# the combined build.
 ONLY_EL="${1:-}"
 case "$ONLY_EL" in
     8)  build_one "latest-el8" ".el8." ;;
     9)  build_one "latest-el9" ".el9." ;;
-    "") build_one "latest-el8" ".el8."; build_one "latest-el9" ".el9." ;;
+    "") build_one "latest" "" ;;
     *)  echo "ERROR: arg must be 8, 9, or empty (got '$ONLY_EL')" >&2; exit 1 ;;
 esac
 
