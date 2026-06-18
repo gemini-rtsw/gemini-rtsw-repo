@@ -258,6 +258,11 @@ build_one() {
 
     echo "[$tag] building + pushing $RPM_REPO_IMAGE:$tag ($bucketed RPMs)..."
     rm -rf "$BUILD_DIR"; mv "$bdir" "$BUILD_DIR"
+    # The RPMs now live in $BUILD_DIR (bucketed). $RPM_DIR is a redundant copy of
+    # the same multi-GB set; free it before the build so the docker daemon has
+    # headroom for the build context + overlay. Safe because this runner builds
+    # only this one EL (per-EL matrix), so $RPM_DIR is not needed again.
+    if [ -n "$ONLY_EL" ]; then rm -rf "$RPM_DIR"; df -h / 2>/dev/null || true; fi
     docker build -f "$SCRIPT_DIR/Dockerfile.rpm-repo" \
         --build-arg NUM_BUCKETS=$NUM_BUCKETS \
         -t "$RPM_REPO_IMAGE:$tag" "$SCRIPT_DIR"

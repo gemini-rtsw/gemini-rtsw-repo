@@ -15,9 +15,12 @@ RUN dnf install -y createrepo_c && dnf clean all
 # they disagree.
 COPY rpm-repo/ /build/buckets/
 
-# createrepo needs all RPMs in one dir; assemble a flat view, index it.
+# createrepo needs all RPMs in one dir; assemble a flat view with HARD LINKS
+# (cp -l) so it costs ~no extra disk -- a plain copy would duplicate the entire
+# multi-GB RPM set inside the builder and overflow the runner. Falls back to a
+# normal copy only if hardlinking fails (e.g. cross-device).
 RUN mkdir -p /build/flat && \
-    for d in /build/buckets/b*/; do cp -a "$d"*.rpm /build/flat/ 2>/dev/null || true; done && \
+    for d in /build/buckets/b*/; do cp -l "$d"*.rpm /build/flat/ 2>/dev/null || cp -a "$d"*.rpm /build/flat/ 2>/dev/null || true; done && \
     createrepo_c /build/flat/
 
 FROM nginx:alpine

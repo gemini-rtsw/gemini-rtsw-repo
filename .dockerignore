@@ -1,0 +1,9 @@
+# Keep the docker build context small. The build only needs ./rpm-repo (the
+# bucketed RPMs) and the Dockerfile. Everything else -- especially ./rpms (the
+# multi-GB extracted scratch-tag RPMs, redundant once bucketed) -- would
+# otherwise be shipped to the daemon as context and overflow the runner disk.
+rpms/
+.git/
+*.md
+*.sh
+ethernet-vpnkit.sock
