@@ -188,6 +188,16 @@ build_one() {
         rm -rf "$bdir"; return 0
     fi
 
+    # Visibility: full sorted RPM list going into this image + a spot-check of
+    # key packages, so the log shows exactly what was published.
+    echo "[$tag] ----- RPMs in this image ($n) -----"
+    find "$bdir" -maxdepth 1 -name '*.rpm' -printf '%f\n' | sort | sed "s/^/[$tag]   /"
+    echo "[$tag] ----- key-package spot check -----"
+    for key in gemini-ade epics-base-devel- asyn- procServ- streamdevice-; do
+        c=$(find "$bdir" -maxdepth 1 -name "${key}*.rpm" | wc -l | tr -d ' ')
+        echo "[$tag]   ${key}*: $c"
+    done
+
     # Anti-truncation: never publish fewer RPMs than last time.
     local prev; prev=$(read_count_marker "$tag")
     echo "[$tag] previous published count: $prev"
@@ -223,6 +233,8 @@ build_one() {
 
     # Record the new count (after a successful push) for next run's guard.
     write_count_marker "$tag" "$bucketed"
+    # Stash the published count for the final summary.
+    echo "$tag $bucketed" >> "$SUMMARY_FILE"
 
     # Reclaim disk before the next per-EL build (the built image is pushed; the
     # RPMs persist as files in $RPM_DIR, so this is lossless).
@@ -233,7 +245,14 @@ build_one() {
     echo "[$tag] pushed."
 }
 
+SUMMARY_FILE=$(mktemp)
 build_one "latest-el8" ".el8."
 build_one "latest-el9" ".el9."
 
-echo "Sync complete! Rebuilt :latest-el8 and :latest-el9 purely from $TAG_COUNT scratch tags."
+echo ""
+echo "================ PUBLISH SUMMARY ================"
+echo "Source: $TAG_COUNT scratch tags -> $EXTRACTED distinct RPMs"
+while read -r t cnt; do echo "  $t : $cnt RPMs published"; done < "$SUMMARY_FILE"
+rm -f "$SUMMARY_FILE"
+echo "================================================"
+echo "Sync complete! Rebuilt :latest-el8 and :latest-el9 purely from the scratch tags."
