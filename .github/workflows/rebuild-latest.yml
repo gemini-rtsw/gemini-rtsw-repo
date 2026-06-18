@@ -13,6 +13,11 @@ name: rebuild-latest
 
 on:
   workflow_dispatch:
+    inputs:
+      allow_shrink:
+        description: 'Allow publishing fewer RPMs than last time (override anti-truncation guard ONCE)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -47,6 +52,8 @@ jobs:
           # sync_repo.sh uses these to list rpm-* tags via the GHCR API.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
+          # Off by default; tick "allow_shrink" when running to override once.
+          ALLOW_SHRINK: ${{ inputs.allow_shrink && '1' || '0' }}
         run: |
           chmod +x sync_repo.sh
           ./sync_repo.sh

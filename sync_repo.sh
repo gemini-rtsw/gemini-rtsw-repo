@@ -173,13 +173,22 @@ build_one() {
         rm -rf "$bdir"; return 0
     fi
 
-    # Anti-truncation: never publish fewer RPMs than last time.
+    # Anti-truncation: never publish fewer RPMs than last time -- UNLESS the
+    # operator explicitly overrides for one run by setting ALLOW_SHRINK=1.
+    # (Use sparingly: a shrink usually means a lost/pruned tag. The override
+    # exists so a known, accepted 1-off shrink doesn't block progress; the new
+    # lower count becomes the marker, so set it deliberately.)
     local prev; prev=$(read_count_marker "$tag")
     echo "[$tag] previous published count: $prev"
     if [ "$n" -lt "$prev" ]; then
-        echo "ERROR [$tag]: would publish $n RPM(s), fewer than previous $prev." >&2
-        echo "       Refusing shrinking publish (possible lost/pruned tags)." >&2
-        exit 1
+        if [ "${ALLOW_SHRINK:-0}" = "1" ]; then
+            echo "WARNING [$tag]: publishing $n RPM(s), fewer than previous $prev -- ALLOW_SHRINK=1 override." >&2
+        else
+            echo "ERROR [$tag]: would publish $n RPM(s), fewer than previous $prev." >&2
+            echo "       Refusing shrinking publish (possible lost/pruned tags)." >&2
+            echo "       To override this once, set ALLOW_SHRINK=1." >&2
+            exit 1
+        fi
     fi
 
     # Bucket into stable layers.
