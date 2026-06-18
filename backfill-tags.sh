@@ -43,7 +43,13 @@ write_count_marker() {
     echo "  wrote anti-truncation marker rpm-count-${tag} = $n"
 }
 
-for tag in latest-el8 latest-el9; do
+# Source images: the two per-EL images PLUS the legacy combined :latest. The
+# legacy :latest is included because it holds EL-AGNOSTIC grandfathered RPMs
+# (no .elN. dist tag -- gemini-ade, asyn, procServ, streamdevice, ...) that the
+# per-EL images never carried; without it those irreplaceable RPMs would never
+# get tagged. We do NOT write a count marker for :latest (it is not a published
+# target, just a tag source).
+for tag in latest-el8 latest-el9 latest; do
     echo "=== Source image: $RPM_REPO_IMAGE:$tag ==="
     if ! docker pull -q "$RPM_REPO_IMAGE:$tag" >/dev/null 2>&1; then
         echo "  (image $tag not found; skipping)"
@@ -84,9 +90,11 @@ for tag in latest-el8 latest-el9; do
         echo "  pushed missing: $t"
     done < <(find "$dir" -maxdepth 1 -name '*.rpm' | sort)
 
-    # Seed the anti-truncation floor for this image at its current full count,
-    # so the first pure-from-tags publish cannot truncate below it.
-    write_count_marker "$tag" "$n"
+    # Seed the anti-truncation floor for the published per-EL images. Skip the
+    # legacy :latest (not a publish target; its count would be meaningless).
+    if [ "$tag" != "latest" ]; then
+        write_count_marker "$tag" "$n"
+    fi
 done
 
 echo ""
