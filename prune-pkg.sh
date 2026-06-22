@@ -117,56 +117,53 @@ fi
 # NVR+EL so you can see how many share an identity, and YOU choose what to keep.
 # Default is always KEEP; nothing goes without your explicit per-RPM "d".
 #
-# Write an EDITABLE plan file: every git-hash build pre-marked KEEP, grouped by
-# NVR+EL. You open it, change KEEP -> DELETE on the builds you want removed,
-# save, and close your editor. Untouched lines stay KEEP (default-safe). This
-# is far clearer than a blind per-RPM prompt -- you see every group and every
-# choice at once.
-plan="$WORK/prune-plan.txt"
-{
-    echo "# PRUNE PLAN for: ${PKG}"
-    echo "#"
-    echo "# Change 'KEEP' to 'DELETE' on builds you want to remove, then save & quit."
-    echo "# Lines left as KEEP are kept. Comments (#) ignored. Within each group,"
-    echo "# keep the hash you still build/pin; delete the older ones."
-    if [ -s "$WORK/protected" ]; then
-        echo "#"
-        echo "# PROTECTED (no git hash -- cannot be deleted, shown for reference):"
-        sort "$WORK/protected" | sed 's/^/#   /'
-    fi
-    cut -f1 "$WORK/groups" | sort -u | while IFS= read -r gk; do
-        grp=$(awk -F'\t' -v k="$gk" '$1==k{print $2}' "$WORK/groups" | sort)
-        cnt=$(printf '%s\n' "$grp" | grep -c .)
-        echo ""
-        echo "# --- group: ${gk}  (${cnt} build(s)) ---"
-        printf '%s\n' "$grp" | sed 's/^/KEEP    /'
-    done
-} > "$plan"
+# RULE: within each NVR+EL group, KEEP the latest-uploaded build; everything
+# older in that group goes to DELETE. Protected (no-git-hash) RPMs are always
+# kept. The DELETE list therefore contains ONLY old hashes.
+#
+# "latest" = most recent GHCR upload time. Fetch created_at for each tag once.
+created="$WORK/created"; : > "$created"
+gh api --paginate "/orgs/gemini-rtsw/packages/container/rpm-repo/versions" \
+    --jq '.[] | .created_at as $c | .metadata.container.tags[]? | "\(.)\t\($c)"' \
+    2>/dev/null | grep -E '^rpm-' > "$created" || true
+ts_of() { awk -F'\t' -v t="$1" '$1==t{print $2; exit}' "$created"; }
 
-ncand=$(grep -cE '^KEEP' "$plan" || true)
+keep_list="$WORK/keep"; : > "$keep_list"
+del_list="$WORK/delete"; : > "$del_list"
+cut -f1 "$WORK/groups" | sort -u | while IFS= read -r gk; do
+    grp=$(awk -F'\t' -v k="$gk" '$1==k{print $2}' "$WORK/groups")
+    # keeper = max created_at in the group; fall back to version-sort if no ts
+    keeper="" kts=""
+    while IFS= read -r t; do
+        [ -n "$t" ] || continue
+        cts=$(ts_of "$t")
+        if [ -n "$cts" ] && { [ -z "$kts" ] || [ "$cts" \> "$kts" ]; }; then keeper="$t"; kts="$cts"; fi
+    done <<< "$grp"
+    [ -n "$keeper" ] || keeper=$(printf '%s\n' "$grp" | sort -V | tail -1)
+    echo "$keeper" >> "$keep_list"
+    printf '%s\n' "$grp" | grep -vxF "$keeper" >> "$del_list" || true
+done
+# protected (no-git-hash) are always kept
+[ -s "$WORK/protected" ] && cat "$WORK/protected" >> "$keep_list"
+
+ndel=$(grep -c . "$del_list" || true)
+
 echo ""
-echo "================ PRUNE PLAN: ${PKG} ================"
-echo "$ncand git-hash build(s) in $(cut -f1 "$WORK/groups" | sort -u | wc -l | tr -d ' ') group(s)."
-[ -s "$WORK/protected" ] && echo "$(grep -c . "$WORK/protected") protected (no-git-hash) RPM(s) shown but not deletable."
+echo "==================== PRUNE: ${PKG} ===================="
+echo ">> KEEP ($(grep -c . "$keep_list") RPM):"
+sort "$keep_list" | sed 's/^/   keep    /'
 echo ""
-echo "Opening the plan in your editor (\${EDITOR:-vi})."
-echo "  -> change KEEP to DELETE for builds to remove, then save & quit."
-printf "Press Enter to edit... "; read -r _ </dev/tty || true
-"${EDITOR:-vi}" "$plan" </dev/tty >/dev/tty 2>&1 || { echo "editor exited non-zero; aborting." >&2; exit 1; }
-
-# Collect lines marked DELETE.
-to_delete="$WORK/to_delete"
-grep -E '^DELETE[[:space:]]' "$plan" | awk '{print $2}' | grep . > "$to_delete" || true
-
-ndel=$(grep -c . "$to_delete" || true)
+echo ">> DELETE ($ndel old-hash RPM):"
+if [ "$ndel" -eq 0 ]; then echo "   (nothing -- every NVR has only one build)"; fi
+sort "$del_list" | sed 's/^/   DELETE  /'
+echo "======================================================="
+if [ "$ndel" -eq 0 ]; then echo "Nothing to prune."; exit 0; fi
 echo ""
-if [ "$ndel" -eq 0 ]; then echo "No builds marked DELETE. Nothing to do."; exit 0; fi
-echo "You marked these $ndel tag(s) for DELETE:"
-sed 's/^/  /' "$to_delete"
-printf 'Type "DELETE" to confirm: '
-read -r final </dev/tty || final=""
-if [ "$final" != "DELETE" ]; then echo "Aborted; nothing deleted."; exit 0; fi
+printf 'Delete the %s DELETE rpm(s) above and keep the rest? [y/N] ' "$ndel"
+read -r ans </dev/tty || ans="n"
+case "$ans" in y|Y|yes|YES) ;; *) echo "Aborted; nothing deleted."; exit 0 ;; esac
 
+to_delete="$del_list"
 echo "Deleting tags..."
 while IFS= read -r t; do
     [ -n "$t" ] || continue
