@@ -61,7 +61,9 @@ based on `--el`:
 | `upload-rpm.sh` | **Register RPM(s).** Push EACH RPM as its own per-NVRA scratch tag `rpm-<NVRA>`. With no flag, also publishes (calls `sync_repo.sh`). With `--tag-only`, pushes tags and stops. |
 | `sync_repo.sh` | **Publish.** Rebuild `:latest-el8` / `:latest-el9` **purely from the `rpm-*` tags** (no merge-pull of the old image). Safe to run standalone to **heal**. |
 | `backfill-tags.sh` | **One-time migration.** Enumerate every RPM in the current images (incl. grandfathered) and push each as a per-NVRA tag, so the tags become the complete source of truth. |
-| `tag-lib.sh` | Shared helper: `rpm_tag_for` maps an RPM filename to its scratch tag (case-preserved, sanitized). |
+| `repo-usage.sh` | **Space report.** Sum scratch-tag sizes per package, biggest first, so you can spot heavy packages (e.g. epics-base) to prune. |
+| `prune-pkg.sh` | **Targeted prune.** For ONE package, keep the newest build per NVR-group and interactively delete older git-hash builds (preview + per-RPM confirm), then rebuild `:latest`. |
+| `tag-lib.sh` | Shared helpers: `rpm_tag_for`, tag listing, push-retry, GHCR tag delete. |
 | `list_rpms.sh` | List RPMs in an image |
 | `download_from_gitlab.sh` | One-time migration: pull all RPMs out of the old GitLab registry into `rpms/` |
 
@@ -89,6 +91,34 @@ It rebuilds the per-EL images purely from the `rpm-*` tags, so any RPM that was
 missing from an image returns. Prefer running it on a runner: trigger the
 **`rebuild-latest`** workflow from the GitHub UI (**Actions → rebuild-latest →
 Run workflow**), which runs `sync_repo.sh` on a GitHub runner.
+
+### Reclaiming space: usage report + targeted prune
+
+The scratch tags accumulate every git-hash build forever, so the repo grows and
+eventually strains runner disk. To reclaim space:
+
+**1. See who's big:**
+
+    ./repo-usage.sh
+
+Lists each package's tag count + total size, biggest first (e.g. epics-base and
+rtems are the heavy ones).
+
+**2. Prune old builds of a heavy package:**
+
+    ./prune-pkg.sh epics-base
+
+For that one package it keeps the **newest build per NVR-group** (by GHCR
+creation time) and offers the **older git-hashes** as prune candidates. It shows
+a preview, then asks **per RPM** (default = keep); after you confirm, it deletes
+the chosen scratch tags and rebuilds the served images.
+
+> **Safety — you are the safety net.** There is NO automated "is this pinned?"
+> check: pins live across many branches/release tags and even in repos OUTSIDE
+> this GitHub org, so it's impossible to know for certain. Review the preview
+> and keep anything a release or external consumer might still need. Nothing is
+> deleted without per-RPM confirmation. Grandfathered/clean RPMs (no `.git.`
+> hash in the release) are never offered as candidates.
 
 ### List RPMs
 

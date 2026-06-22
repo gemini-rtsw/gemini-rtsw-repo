@@ -65,3 +65,49 @@ docker_push_retry() {
     echo "ERROR: docker push failed after $DOCKER_PUSH_RETRIES attempts: $ref" >&2
     return 1
 }
+
+# ghcr_list_rpm_tags -> prints every rpm-* scratch tag (one per line), excluding
+# the rpm-count-* anti-truncation markers. Uses cursor pagination so it can't
+# silently stop early. Needs GITHUB_TOKEN/CR_PAT + GITHUB_ACTOR/whoami.
+ghcr_list_rpm_tags() {
+    local gh_user gh_pass basic bearer url page count last="" all=""
+    gh_user="${GITHUB_ACTOR:-$(whoami)}"
+    gh_pass="${GITHUB_TOKEN:-${CR_PAT:-}}"
+    if [ -z "$gh_pass" ]; then echo "ERROR: set GITHUB_TOKEN (or CR_PAT)" >&2; return 1; fi
+    basic=$(printf '%s:%s' "$gh_user" "$gh_pass" | base64 | tr -d '\n')
+    bearer=$(curl -s -H "Authorization: Basic $basic" \
+        "https://ghcr.io/token?service=ghcr.io&scope=repository:gemini-rtsw/rpm-repo:pull" \
+        | python3 -c "import json,sys; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
+    if [ -z "$bearer" ]; then echo "ERROR: GHCR token request failed" >&2; return 1; fi
+    while :; do
+        if [ -z "$last" ]; then url="https://ghcr.io/v2/gemini-rtsw/rpm-repo/tags/list?n=100"
+        else url="https://ghcr.io/v2/gemini-rtsw/rpm-repo/tags/list?n=100&last=${last}"; fi
+        page=$(curl -s -H "Authorization: Bearer $bearer" "$url" \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(d.get('tags') or []))" 2>/dev/null || true)
+        count=$(printf '%s\n' "$page" | grep -c . || true)
+        [ "$count" -eq 0 ] && break
+        all="${all}${page}"$'\n'
+        last=$(printf '%s\n' "$page" | grep . | tail -1)
+        [ "$count" -lt 100 ] && break
+    done
+    printf '%s\n' "$all" | grep '^rpm-' | grep -v '^rpm-count-' | sort -u | grep . || true
+}
+
+# ghcr_delete_tag <tag> -- delete one scratch tag's package-version from GHCR via
+# the GitHub Packages REST API (the OCI registry has no tag-delete; we resolve
+# the tag to its version id and DELETE that). Needs `gh` authenticated with
+# delete:packages scope, OR GITHUB_TOKEN with packages:write. Org packages use
+# the /orgs/ path. Returns nonzero on failure (caller decides whether fatal).
+ghcr_delete_tag() {
+    local tag="$1" vid
+    # Find the package-version id whose metadata.container.tags includes $tag.
+    vid=$(gh api --paginate \
+        "/orgs/gemini-rtsw/packages/container/rpm-repo/versions" \
+        --jq ".[] | select(.metadata.container.tags[]? == \"${tag}\") | .id" 2>/dev/null | head -1)
+    if [ -z "$vid" ]; then
+        echo "  WARN: no version id found for tag $tag (already gone?)" >&2
+        return 1
+    fi
+    gh api -X DELETE \
+        "/orgs/gemini-rtsw/packages/container/rpm-repo/versions/${vid}" >/dev/null 2>&1
+}

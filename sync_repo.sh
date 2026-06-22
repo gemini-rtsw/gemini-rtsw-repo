@@ -227,13 +227,21 @@ build_one() {
         echo "[$tag]   ${key}*: $c"
     done
 
-    # Anti-truncation: never publish fewer RPMs than last time.
+    # Anti-truncation: never publish fewer RPMs than last time -- UNLESS this is
+    # an intentional prune (PRUNE_REBUILD=1, set by prune-pkg.sh). A prune
+    # deliberately removes old tags, so the new count is legitimately smaller;
+    # we warn and proceed, and the new (lower) count becomes the marker.
     local prev; prev=$(read_count_marker "$tag")
     echo "[$tag] previous published count: $prev"
     if [ "$n" -lt "$prev" ]; then
-        echo "ERROR [$tag]: would publish $n RPM(s), fewer than previous $prev." >&2
-        echo "       Refusing shrinking publish (possible lost/pruned tags)." >&2
-        exit 1
+        if [ "${PRUNE_REBUILD:-0}" = "1" ]; then
+            echo "WARNING [$tag]: publishing $n RPM(s), fewer than previous $prev -- PRUNE_REBUILD intentional shrink." >&2
+        else
+            echo "ERROR [$tag]: would publish $n RPM(s), fewer than previous $prev." >&2
+            echo "       Refusing shrinking publish (possible lost/pruned tags)." >&2
+            echo "       (If this is an intentional prune, run via prune-pkg.sh / set PRUNE_REBUILD=1.)" >&2
+            exit 1
+        fi
     fi
 
     # Bucket into stable layers.
