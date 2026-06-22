@@ -115,7 +115,6 @@ fi
 # group key from hashfree_group is "rel|el|arch"; drop the middle (el) field.
 nvr_no_el() { printf '%s|%s' "${1%%|*}" "${1##*|}"; }
 
-# Fetch each tag's GHCR upload time (created_at) via the GitHub REST API using
 # extract git short-hash from a tag (after .git. , drop el/arch suffix)
 declare_hash() {
     case "$1" in
@@ -124,51 +123,34 @@ declare_hash() {
     esac
 }
 
-# Order hashes by real COMMIT DATE -- the only reliable "latest" (GHCR upload
-# times were scrambled by the one-time backfill). Read commit dates from the
-# GitHub API, NOT a local clone, so this works anywhere the script runs (a
-# runner, a fresh checkout) with just the token -- no sibling repos needed.
-#
-# Resolve which GitHub repo holds the commits: try the package name + a few
-# variants against the API until one resolves a sample hash.
-ORG="gemini-rtsw"
-sample_hash=$(cut -f2 "$WORK/groups" | while IFS= read -r t; do declare_hash "$t"; echo; done | grep . | head -1)
-gh_commit_date() {  # repo hash -> ISO date, "" if not found
-    curl -s -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
-        "https://api.github.com/repos/${ORG}/$1/commits/$2" 2>/dev/null \
-        | python3 -c "import json,sys
-try: print(json.load(sys.stdin)['commit']['committer']['date'])
-except Exception: print('')" 2>/dev/null
-}
-GH_REPO=""
-for cand in "$PKG" "${PKG}-7" "${PKG%-*}" "$(printf '%s' "$PKG" | tr '[:upper:]' '[:lower:]')"; do
-    [ -n "$cand" ] || continue
-    if [ -n "$(gh_commit_date "$cand" "$sample_hash")" ]; then GH_REPO="$cand"; break; fi
-done
-if [ -z "$GH_REPO" ]; then
-    echo "ERROR: couldn't find the GitHub repo for '${PKG}' (tried name variants)." >&2
-    echo "       Pass it explicitly is not supported yet; the commit dates are needed" >&2
-    echo "       to order hashes. Sample hash: ${sample_hash}" >&2
-    exit 1
-fi
-echo "Ordering by git commit date from GitHub repo: ${ORG}/${GH_REPO}"
+# LATEST = newest CONTAINER (the GHCR scratch image's upload time). No git, no
+# GitHub repo, no specs -- just the registry. Fetch every tag's created_at once
+# from the GHCR package-versions API (token already resolved).
+echo "Fetching container upload times..."
+created="$WORK/created"; : > "$created"   # "tag<TAB>YYYYMMDDhhmmss"
+python3 - "$GITHUB_TOKEN" "$created" <<'PY' 2>/dev/null || true
+import json,urllib.request,sys,re
+tok,out=sys.argv[1],sys.argv[2]; page=1; rows=[]
+while True:
+    req=urllib.request.Request(
+        f"https://api.github.com/orgs/gemini-rtsw/packages/container/rpm-repo/versions?per_page=100&page={page}",
+        headers={"Authorization":f"Bearer {tok}","Accept":"application/vnd.github+json"})
+    try: d=json.load(urllib.request.urlopen(req))
+    except Exception: break
+    if not isinstance(d,list) or not d: break
+    for v in d:
+        c=re.sub(r'\D','',v.get('created_at','') or '')   # ISO -> sortable digits
+        for t in (v.get('metadata',{}).get('container',{}).get('tags') or []):
+            rows.append((t,c))
+    if len(d)<100: break
+    page+=1
+with open(out,'w') as f:
+    for t,c in rows: f.write(f"{t}\t{c or 0}\n")
+PY
+ct_of() { awk -F'\t' -v k="$1" '$1==k{print $2; exit}' "$created"; }
 
-# commit_ct HASH -> commit time as a sortable epoch-ish (we just need ordering).
-# Cache lookups so we don't hit the API repeatedly for the same hash.
-: > "$WORK/ctcache"
-commit_ct() {
-    local h="$1" cached d
-    cached=$(awk -F'\t' -v k="$h" '$1==k{print $2; exit}' "$WORK/ctcache")
-    if [ -n "$cached" ]; then printf '%s' "$cached"; return; fi
-    d=$(gh_commit_date "$GH_REPO" "$h")
-    # convert ISO 2026-06-17T21:48:59Z -> 20260617214859 (sortable integer)
-    d=$(printf '%s' "$d" | tr -dc '0-9')
-    printf '%s\t%s\n' "$h" "${d:-0}" >> "$WORK/ctcache"
-    printf '%s' "${d:-0}"
-}
-
-# Keeper per nvr_no_el = the hash with the NEWEST git commit. Hashes not found
-# in git (grandfathered/unknown) get ct 0, so a real commit always wins.
+# Keeper per NVR (ignoring EL, so el8+el9 keep the SAME hash) = the hash whose
+# container was uploaded most recently. Rank by upload time.
 keeper_hash="$WORK/keeper_hash"; : > "$keeper_hash"   # "nvr_no_el<TAB>hash"
 cut -f1 "$WORK/groups" | while IFS= read -r gk; do nvr_no_el "$gk"; echo; done \
     | sort -u | while IFS= read -r nk; do
@@ -178,14 +160,14 @@ cut -f1 "$WORK/groups" | while IFS= read -r gk; do nvr_no_el "$gk"; echo; done \
         [ -n "$t" ] || continue
         [ "$(nvr_no_el "$(hashfree_group "$t")")" = "$nk" ] || continue
         h=$(declare_hash "$t"); [ -n "$h" ] || continue
-        ct=$(commit_ct "$h"); case "$ct" in ''|*[!0-9]*) ct=0 ;; esac
+        ct=$(ct_of "$t"); case "$ct" in ''|*[!0-9]*) ct=0 ;; esac
         if [ "$ct" -gt "$bct" ]; then bct="$ct"; best="$h"; fi
     done < <(cut -f2 "$WORK/groups")
     [ -n "$best" ] && printf '%s\t%s\n' "$nk" "$best" >> "$keeper_hash"
 done
 
-# KEEP = the newest-image hash for each NVR (the keeper_hash chosen above by
-# GHCR image creation time, consistent across ELs). DELETE = every older hash.
+# KEEP = the newest-container hash for each NVR (consistent across ELs).
+# DELETE = every older hash.
 keep_list="$WORK/keep"; : > "$keep_list"
 del_list="$WORK/delete"; : > "$del_list"
 while IFS= read -r t; do
