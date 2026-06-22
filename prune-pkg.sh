@@ -96,54 +96,38 @@ if [ ! -s "$WORK/groups" ]; then
     exit 0
 fi
 
-# For each group, the KEEPER is the NEWEST tag by GHCR creation time -- NOT by
-# version/hash sort, because a git hash is not chronologically ordered (it would
-# pick the alphabetically-highest hash, which may be an older commit). We query
-# each tag's created_at once and cache it. If a timestamp can't be determined,
-# that tag is treated as a CANDIDATE (offered for review) rather than silently
-# kept -- you confirm every deletion anyway.
-echo "Determining newest build per group (by GHCR creation time)..."
-created="$WORK/created"; : > "$created"   # "tag<TAB>iso8601"
-gh api --paginate "/orgs/gemini-rtsw/packages/container/rpm-repo/versions" \
-    --jq '.[] | .created_at as $c | .metadata.container.tags[]? | "\(.)\t\($c)"' \
-    2>/dev/null | grep -E '^rpm-' > "$created" || true
-
-ts_of() {  # tag -> sortable timestamp ("" if unknown)
-    awk -F'\t' -v t="$1" '$1==t{print $2; exit}' "$created"
-}
-
+# NO auto-keeper. We deliberately do NOT try to pick "the newest" to keep:
+#  - a git hash is not chronologically ordered, and
+#  - GHCR created_at is unreliable here (the one-time backfill batch-created all
+#    tags with ~identical timestamps), and
+#  - which hash is actually in use is unknowable (pins span branches, release
+#    tags, and repos outside this org).
+# Guessing a keeper risks offering the IN-USE hash for deletion (it did, for
+# epics-base f9e3717.el8). So instead: present EVERY git-hash build, GROUPED by
+# NVR+EL so you can see how many share an identity, and YOU choose what to keep.
+# Default is always KEEP; nothing goes without your explicit per-RPM "d".
+#
+# Build a display list: for each group with >1 build, list all its tags.
 candidates="$WORK/candidates"; : > "$candidates"
-keepers="$WORK/keepers"; : > "$keepers"
-cut -f1 "$WORK/groups" | sort -u | while IFS= read -r gk; do
-    grp=$(awk -F'\t' -v k="$gk" '$1==k{print $2}' "$WORK/groups")
-    # pick keeper = max created_at; tags with unknown ts can't be the keeper
-    keeper=""; keeper_ts=""
-    while IFS= read -r t; do
-        [ -n "$t" ] || continue
-        cts=$(ts_of "$t")
-        [ -n "$cts" ] || continue
-        if [ -z "$keeper_ts" ] || [ "$cts" \> "$keeper_ts" ]; then keeper="$t"; keeper_ts="$cts"; fi
-    done <<< "$grp"
-    # Fallback: if NO timestamps were found for the whole group, keep the
-    # version-sorted last (better than deleting all of them).
-    [ -n "$keeper" ] || keeper=$(printf '%s\n' "$grp" | sort -V | tail -1)
-    echo "$keeper" >> "$keepers"
-    printf '%s\n' "$grp" | grep -vxF "$keeper" >> "$candidates" || true
-done
-
-ncand=$(grep -c . "$candidates" || true)
 echo ""
 echo "================ PRUNE PREVIEW: ${PKG} ================"
-echo "Keeping (newest per NVR-group):"
-sort "$keepers" | sed 's/^/  KEEP  /'
+echo "Every git-hash build below is a candidate. Builds are grouped by"
+echo "NVR+EL (same identity, different commit). YOU pick what to delete;"
+echo "default is KEEP. (Grandfathered/clean RPMs without a .git. hash are"
+echo "not shown -- they are never pruned.)"
+cut -f1 "$WORK/groups" | sort -u | while IFS= read -r gk; do
+    grp=$(awk -F'\t' -v k="$gk" '$1==k{print $2}' "$WORK/groups" | sort)
+    cnt=$(printf '%s\n' "$grp" | grep -c .)
+    echo ""
+    echo "  --- group: ${gk} (${cnt} build(s)) ---"
+    printf '%s\n' "$grp" | sed 's/^/      /'
+    printf '%s\n' "$grp" >> "$candidates"
+done
+ncand=$(grep -c . "$candidates" || true)
 echo ""
-echo "Prune candidates (older git-hashes):"
-if [ "$ncand" -eq 0 ]; then
-    echo "  (none -- every group has only one build)"; echo "Nothing to prune."; exit 0
-fi
-sort "$candidates" | sed 's/^/  PRUNE? /'
 echo "======================================================="
-echo "$ncand candidate(s). You will confirm each one (default = KEEP)."
+echo "$ncand build(s) across all groups. Confirm each (default = KEEP)."
+echo "Tip: within a group, keep the hash you still build/pin; delete the rest."
 echo ""
 
 # Interactive per-candidate prompt. Default (Enter) = KEEP.
