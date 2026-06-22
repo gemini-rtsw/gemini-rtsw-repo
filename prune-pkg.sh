@@ -30,9 +30,28 @@
 
 set -euo pipefail
 
-PKG="${1:-}"
+PKG=""
+KEEP_HASHES=""   # space-separated git short-hashes to KEEP
+LIST_ONLY=0
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --keep) KEEP_HASHES="$KEEP_HASHES $2"; shift 2 ;;
+        --keep=*) KEEP_HASHES="$KEEP_HASHES ${1#*=}"; shift ;;
+        --list) LIST_ONLY=1; shift ;;
+        -*) echo "Unknown option: $1" >&2; exit 1 ;;
+        *) PKG="$1"; shift ;;
+    esac
+done
 if [ -z "$PKG" ]; then
-    echo "Usage: $0 <package-name>   (e.g. epics-base, rtems)" >&2
+    echo "Usage:" >&2
+    echo "  $0 <package> --list                 # list all builds + their hashes" >&2
+    echo "  $0 <package> --keep <hash> [...]     # KEEP these hashes, DELETE older ones" >&2
+    echo "  Example: $0 epics-base --list ; then  $0 epics-base --keep f9e3717" >&2
+    exit 1
+fi
+if [ "$LIST_ONLY" -eq 0 ] && [ -z "${KEEP_HASHES// /}" ]; then
+    echo "ERROR: name the build(s) to keep with --keep <hash>, or use --list first." >&2
+    echo "  Example: $0 $PKG --keep f9e3717" >&2
     exit 1
 fi
 
@@ -106,45 +125,52 @@ if [ ! -s "$WORK/groups" ]; then
     exit 0
 fi
 
-# NO auto-keeper. We deliberately do NOT try to pick "the newest" to keep:
-#  - a git hash is not chronologically ordered, and
-#  - GHCR created_at is unreliable here (the one-time backfill batch-created all
-#    tags with ~identical timestamps), and
-#  - which hash is actually in use is unknowable (pins span branches, release
-#    tags, and repos outside this org).
-# Guessing a keeper risks offering the IN-USE hash for deletion (it did, for
-# epics-base f9e3717.el8). So instead: present EVERY git-hash build, GROUPED by
-# NVR+EL so you can see how many share an identity, and YOU choose what to keep.
-# Default is always KEEP; nothing goes without your explicit per-RPM "d".
-#
-# RULE: within each NVR+EL group, KEEP the latest-uploaded build; everything
-# older in that group goes to DELETE. Protected (no-git-hash) RPMs are always
-# kept. The DELETE list therefore contains ONLY old hashes.
-#
-# "latest" = most recent GHCR upload time. Fetch created_at for each tag once.
-created="$WORK/created"; : > "$created"
-gh api --paginate "/orgs/gemini-rtsw/packages/container/rpm-repo/versions" \
-    --jq '.[] | .created_at as $c | .metadata.container.tags[]? | "\(.)\t\($c)"' \
-    2>/dev/null | grep -E '^rpm-' > "$created" || true
-ts_of() { awk -F'\t' -v t="$1" '$1==t{print $2; exit}' "$created"; }
+# all git-hash builds for this package (one per line), sorted
+all_builds="$WORK/all"; cut -f2 "$WORK/groups" | sort -u > "$all_builds"
 
+# --list: just show every build + its hash so you can choose what to --keep.
+if [ "$LIST_ONLY" -eq 1 ]; then
+    echo ""
+    echo "==================== BUILDS: ${PKG} ===================="
+    [ -s "$WORK/protected" ] && { echo "Protected (no git hash, always kept):";
+        sort "$WORK/protected" | sed 's/^/   /'; echo ""; }
+    echo "Git-hash builds (grouped by NVR+EL):"
+    cut -f1 "$WORK/groups" | sort -u | while IFS= read -r gk; do
+        echo "  --- ${gk} ---"
+        awk -F'\t' -v k="$gk" '$1==k{print $2}' "$WORK/groups" | sort | sed 's/^/     /'
+    done
+    echo "======================================================="
+    echo "Pick the hash(es) you still use, then:"
+    echo "  $0 ${PKG} --keep <hash> [--keep <hash> ...]"
+    exit 0
+fi
+
+# RULE: KEEP = any build whose git-hash matches a --keep value (across all EL),
+# plus all protected (no-git-hash) RPMs. DELETE = every other git-hash build.
+# The keep decision comes from YOU (you know the in-use hash) -- no unreliable
+# timestamp guessing.
 keep_list="$WORK/keep"; : > "$keep_list"
 del_list="$WORK/delete"; : > "$del_list"
-cut -f1 "$WORK/groups" | sort -u | while IFS= read -r gk; do
-    grp=$(awk -F'\t' -v k="$gk" '$1==k{print $2}' "$WORK/groups")
-    # keeper = max created_at in the group; fall back to version-sort if no ts
-    keeper="" kts=""
-    while IFS= read -r t; do
-        [ -n "$t" ] || continue
-        cts=$(ts_of "$t")
-        if [ -n "$cts" ] && { [ -z "$kts" ] || [ "$cts" \> "$kts" ]; }; then keeper="$t"; kts="$cts"; fi
-    done <<< "$grp"
-    [ -n "$keeper" ] || keeper=$(printf '%s\n' "$grp" | sort -V | tail -1)
-    echo "$keeper" >> "$keep_list"
-    printf '%s\n' "$grp" | grep -vxF "$keeper" >> "$del_list" || true
-done
-# protected (no-git-hash) are always kept
+while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    matched=0
+    for h in $KEEP_HASHES; do
+        case "$t" in *".git.${h}."*|*".git.${h}"|*".git${h}."*|*".git${h}") matched=1; break ;; esac
+    done
+    if [ "$matched" -eq 1 ]; then echo "$t" >> "$keep_list"; else echo "$t" >> "$del_list"; fi
+done < "$all_builds"
+# protected (no-git-hash) always kept
 [ -s "$WORK/protected" ] && cat "$WORK/protected" >> "$keep_list"
+
+# Safety: every named --keep hash must actually match something, else likely a
+# typo -- abort rather than delete everything.
+for h in $KEEP_HASHES; do
+    if ! grep -q "$h" "$keep_list"; then
+        echo "ERROR: --keep hash '$h' matched no build for ${PKG}. Typo? Aborting." >&2
+        echo "  (run '$0 ${PKG} --list' to see valid hashes)" >&2
+        exit 1
+    fi
+done
 
 ndel=$(grep -c . "$del_list" || true)
 
