@@ -124,26 +124,48 @@ declare_hash() {
     esac
 }
 
-# Find the sibling git repo that actually CONTAINS these hashes. The repo name
-# may differ from the package name (epics-base -> epics-base-7, AbDf1 -> abdf1),
-# so don't guess by name: take one sample hash and find the sibling repo whose
-# git can resolve it. Order hashes by real COMMIT date -- the only reliable
-# "latest" (GHCR upload times were scrambled by the one-time backfill).
+# Order hashes by real COMMIT DATE -- the only reliable "latest" (GHCR upload
+# times were scrambled by the one-time backfill). Read commit dates from the
+# GitHub API, NOT a local clone, so this works anywhere the script runs (a
+# runner, a fresh checkout) with just the token -- no sibling repos needed.
+#
+# Resolve which GitHub repo holds the commits: try the package name + a few
+# variants against the API until one resolves a sample hash.
+ORG="gemini-rtsw"
 sample_hash=$(cut -f2 "$WORK/groups" | while IFS= read -r t; do declare_hash "$t"; echo; done | grep . | head -1)
-PKG_REPO=""
-for cand in "$SCRIPT_DIR"/../*/; do
-    [ -d "${cand}.git" ] || continue
-    if git -C "$cand" cat-file -e "${sample_hash}^{commit}" 2>/dev/null; then PKG_REPO="${cand%/}"; break; fi
+gh_commit_date() {  # repo hash -> ISO date, "" if not found
+    curl -s -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/repos/${ORG}/$1/commits/$2" 2>/dev/null \
+        | python3 -c "import json,sys
+try: print(json.load(sys.stdin)['commit']['committer']['date'])
+except Exception: print('')" 2>/dev/null
+}
+GH_REPO=""
+for cand in "$PKG" "${PKG}-7" "${PKG%-*}" "$(printf '%s' "$PKG" | tr '[:upper:]' '[:lower:]')"; do
+    [ -n "$cand" ] || continue
+    if [ -n "$(gh_commit_date "$cand" "$sample_hash")" ]; then GH_REPO="$cand"; break; fi
 done
-if [ -z "$PKG_REPO" ]; then
-    echo "ERROR: no sibling git repo resolves '${PKG}' commits (sample ${sample_hash})." >&2
-    echo "       Clone the package's repo beside gemini-rtsw-repo so commit order can be read." >&2
+if [ -z "$GH_REPO" ]; then
+    echo "ERROR: couldn't find the GitHub repo for '${PKG}' (tried name variants)." >&2
+    echo "       Pass it explicitly is not supported yet; the commit dates are needed" >&2
+    echo "       to order hashes. Sample hash: ${sample_hash}" >&2
     exit 1
 fi
-echo "Ordering by git commit date from: $PKG_REPO"
+echo "Ordering by git commit date from GitHub repo: ${ORG}/${GH_REPO}"
 
-# commit_ct HASH -> commit unix timestamp (0 if not in this repo)
-commit_ct() { git -C "$PKG_REPO" show -s --format='%ct' "${1}^{commit}" 2>/dev/null || true; }
+# commit_ct HASH -> commit time as a sortable epoch-ish (we just need ordering).
+# Cache lookups so we don't hit the API repeatedly for the same hash.
+: > "$WORK/ctcache"
+commit_ct() {
+    local h="$1" cached d
+    cached=$(awk -F'\t' -v k="$h" '$1==k{print $2; exit}' "$WORK/ctcache")
+    if [ -n "$cached" ]; then printf '%s' "$cached"; return; fi
+    d=$(gh_commit_date "$GH_REPO" "$h")
+    # convert ISO 2026-06-17T21:48:59Z -> 20260617214859 (sortable integer)
+    d=$(printf '%s' "$d" | tr -dc '0-9')
+    printf '%s\t%s\n' "$h" "${d:-0}" >> "$WORK/ctcache"
+    printf '%s' "${d:-0}"
+}
 
 # Keeper per nvr_no_el = the hash with the NEWEST git commit. Hashes not found
 # in git (grandfathered/unknown) get ct 0, so a real commit always wins.
