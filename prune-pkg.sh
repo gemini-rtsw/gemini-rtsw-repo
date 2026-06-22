@@ -30,34 +30,19 @@
 
 set -euo pipefail
 
-PKG=""
-KEEP_HASHES=""   # space-separated git short-hashes to KEEP
-LIST_ONLY=0
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        --keep) KEEP_HASHES="$KEEP_HASHES $2"; shift 2 ;;
-        --keep=*) KEEP_HASHES="$KEEP_HASHES ${1#*=}"; shift ;;
-        --list) LIST_ONLY=1; shift ;;
-        -*) echo "Unknown option: $1" >&2; exit 1 ;;
-        *) PKG="$1"; shift ;;
-    esac
-done
+PKG="${1:-}"
 if [ -z "$PKG" ]; then
-    echo "Usage:" >&2
-    echo "  $0 <package> --list                 # list all builds + their hashes" >&2
-    echo "  $0 <package> --keep <hash> [...]     # KEEP these hashes, DELETE older ones" >&2
-    echo "  Example: $0 epics-base --list ; then  $0 epics-base --keep f9e3717" >&2
-    exit 1
-fi
-if [ "$LIST_ONLY" -eq 0 ] && [ -z "${KEEP_HASHES// /}" ]; then
-    echo "ERROR: name the build(s) to keep with --keep <hash>, or use --list first." >&2
-    echo "  Example: $0 $PKG --keep f9e3717" >&2
+    echo "Usage: $0 <package>   (e.g. epics-base, rtems)" >&2
     exit 1
 fi
 
 RPM_REPO_IMAGE="ghcr.io/gemini-rtsw/rpm-repo"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/tag-lib.sh"
+
+# Resolve GITHUB_TOKEN/GITHUB_ACTOR up front (from env, gh, or docker login) so
+# they're available to the upload-time query below. Without this, set -u trips.
+ghcr_resolve_creds || exit 1
 
 echo "Listing scratch tags for '${PKG}'..."
 # Match the package and its subpackages: rpm-<PKG>... and rpm-<PKG>-devel...
@@ -125,52 +110,87 @@ if [ ! -s "$WORK/groups" ]; then
     exit 0
 fi
 
-# all git-hash builds for this package (one per line), sorted
-all_builds="$WORK/all"; cut -f2 "$WORK/groups" | sort -u > "$all_builds"
+# nvr_no_el GROUPKEY -> the "name|rel|arch" with EL removed, so el8 and el9 of
+# the same package share ONE key (and therefore ONE chosen keeper hash). The
+# group key from hashfree_group is "rel|el|arch"; drop the middle (el) field.
+nvr_no_el() { printf '%s|%s' "${1%%|*}" "${1##*|}"; }
 
-# --list: just show every build + its hash so you can choose what to --keep.
-if [ "$LIST_ONLY" -eq 1 ]; then
-    echo ""
-    echo "==================== BUILDS: ${PKG} ===================="
-    [ -s "$WORK/protected" ] && { echo "Protected (no git hash, always kept):";
-        sort "$WORK/protected" | sed 's/^/   /'; echo ""; }
-    echo "Git-hash builds (grouped by NVR+EL):"
-    cut -f1 "$WORK/groups" | sort -u | while IFS= read -r gk; do
-        echo "  --- ${gk} ---"
-        awk -F'\t' -v k="$gk" '$1==k{print $2}' "$WORK/groups" | sort | sed 's/^/     /'
-    done
-    echo "======================================================="
-    echo "Pick the hash(es) you still use, then:"
-    echo "  $0 ${PKG} --keep <hash> [--keep <hash> ...]"
-    exit 0
-fi
+# Fetch each tag's GHCR upload time (created_at) via the GitHub REST API using
+# the token we already resolved (curl -- no `gh` needed). Map: tag -> iso8601.
+echo "Fetching upload times..."
+created="$WORK/created"; : > "$created"
+python3 - "$GITHUB_TOKEN" "$created" <<'PY' 2>/dev/null || true
+import json,urllib.request,sys
+tok,out=sys.argv[1],sys.argv[2]; page=1; rows=[]
+while True:
+    req=urllib.request.Request(
+        f"https://api.github.com/orgs/gemini-rtsw/packages/container/rpm-repo/versions?per_page=100&page={page}",
+        headers={"Authorization":f"Bearer {tok}","Accept":"application/vnd.github+json"})
+    try: d=json.load(urllib.request.urlopen(req))
+    except Exception: break
+    if not isinstance(d,list) or not d: break
+    for v in d:
+        for t in (v.get('metadata',{}).get('container',{}).get('tags') or []):
+            rows.append((t,v.get('created_at','')))
+    if len(d)<100: break
+    page+=1
+with open(out,'w') as f:
+    for t,c in rows: f.write(f"{t}\t{c}\n")
+PY
+ts_of() { awk -F'\t' -v t="$1" '$1==t{print $2; exit}' "$created"; }
 
-# RULE: KEEP = any build whose git-hash matches a --keep value (across all EL),
-# plus all protected (no-git-hash) RPMs. DELETE = every other git-hash build.
-# The keep decision comes from YOU (you know the in-use hash) -- no unreliable
-# timestamp guessing.
+# Choose ONE keeper HASH per nvr_no_el: the build with the newest upload time
+# (consistent across ELs). Then KEEP every tag whose hash == the keeper hash for
+# its nvr_no_el; DELETE the rest. This guarantees el8 and el9 keep the SAME hash
+# (the bug was picking different keepers per EL).
+declare_hash() {  # extract git hash from a tag (after .git. , drop trailing)
+    case "$1" in
+        *.git.*) local r="${1##*.git.}"; r="${r%%.el[0-9]*}"; r="${r%.x86_64}"; r="${r%.noarch}"; printf '%s' "$r" ;;
+        *) printf '' ;;
+    esac
+}
+
+# Build: for each nvr_no_el, find keeper hash = hash of the newest-uploaded tag.
+keeper_hash="$WORK/keeper_hash"; : > "$keeper_hash"   # "nvr_no_el<TAB>hash"
+cut -f1 "$WORK/groups" | sort -u | while IFS= read -r gk; do
+    printf '%s\n' "$(nvr_no_el "$gk")"
+done | sort -u | while IFS= read -r nk; do
+    best="" bts=""
+    # all tags whose nvr_no_el == nk
+    while IFS= read -r t; do
+        [ -n "$t" ] || continue
+        tk=$(nvr_no_el "$(hashfree_group "$t")")
+        [ "$tk" = "$nk" ] || continue
+        cts=$(ts_of "$t")
+        if [ -z "$bts" ] || { [ -n "$cts" ] && [ "$cts" \> "$bts" ]; }; then best="$t"; bts="$cts"; fi
+    done < <(cut -f2 "$WORK/groups")
+    printf '%s\t%s\n' "$nk" "$(declare_hash "$best")" >> "$keeper_hash"
+done
+
+# PROTECT pinned hashes: collect every git short-hash referenced by a sibling
+# repo's spec (../*/*.spec). A hash that any spec pins is LIVE and must never be
+# deleted -- this is what guarantees the in-use build (e.g. f9e3717) is kept
+# even if an arbitrary backfill upload-time made some orphan look "newer".
+# (Scans local checkouts only; off-GitHub consumers are still covered by the
+# final y/N review.)
+pinned="$WORK/pinned"; : > "$pinned"
+grep -rhoE '\.git\.([0-9]+\.)?[0-9a-f]{7,}' "$SCRIPT_DIR"/../*/*.spec 2>/dev/null \
+    | grep -oE '[0-9a-f]{7,}$' | sort -u > "$pinned" || true
+
 keep_list="$WORK/keep"; : > "$keep_list"
 del_list="$WORK/delete"; : > "$del_list"
 while IFS= read -r t; do
     [ -n "$t" ] || continue
-    matched=0
-    for h in $KEEP_HASHES; do
-        case "$t" in *".git.${h}."*|*".git.${h}"|*".git${h}."*|*".git${h}") matched=1; break ;; esac
-    done
-    if [ "$matched" -eq 1 ]; then echo "$t" >> "$keep_list"; else echo "$t" >> "$del_list"; fi
-done < "$all_builds"
+    th=$(declare_hash "$t")
+    # 1) pinned by a spec -> always KEEP
+    if [ -n "$th" ] && grep -qxF "$th" "$pinned"; then echo "$t" >> "$keep_list"; continue; fi
+    # 2) else keep the newest-upload hash for this NVR (consistent across ELs)
+    nk=$(nvr_no_el "$(hashfree_group "$t")")
+    kh=$(awk -F'\t' -v k="$nk" '$1==k{print $2; exit}' "$keeper_hash")
+    if [ -n "$kh" ] && [ "$th" = "$kh" ]; then echo "$t" >> "$keep_list"; else echo "$t" >> "$del_list"; fi
+done < <(cut -f2 "$WORK/groups" | sort -u)
 # protected (no-git-hash) always kept
 [ -s "$WORK/protected" ] && cat "$WORK/protected" >> "$keep_list"
-
-# Safety: every named --keep hash must actually match something, else likely a
-# typo -- abort rather than delete everything.
-for h in $KEEP_HASHES; do
-    if ! grep -q "$h" "$keep_list"; then
-        echo "ERROR: --keep hash '$h' matched no build for ${PKG}. Typo? Aborting." >&2
-        echo "  (run '$0 ${PKG} --list' to see valid hashes)" >&2
-        exit 1
-    fi
-done
 
 ndel=$(grep -c . "$del_list" || true)
 
