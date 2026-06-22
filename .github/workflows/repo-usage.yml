@@ -1,0 +1,30 @@
+name: repo-usage
+
+# Report per-package space usage in the rpm-repo scratch tags (biggest first),
+# so you can spot heavy packages to prune. Runs on a runner -- no local token
+# or bandwidth needed.
+#
+# Trigger: Actions -> repo-usage -> Run workflow. Read the table in the log.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  usage:
+    name: rpm-repo usage report
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Report usage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          chmod +x repo-usage.sh
+          ./repo-usage.sh

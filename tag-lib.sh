@@ -68,24 +68,53 @@ docker_push_retry() {
 
 # ghcr_resolve_creds -- ensure GITHUB_TOKEN + GITHUB_ACTOR are set. Order:
 #   1. existing env (GITHUB_TOKEN / CR_PAT, GITHUB_ACTOR) -- e.g. in CI
-#   2. fall back to the local `gh` CLI (gh auth token / gh api user)
-# So the scripts "just work" locally when you're logged in with `gh`, without
-# manually exporting a token. Exports GITHUB_TOKEN and GITHUB_ACTOR.
+#   2. the `gh` CLI (gh auth token / gh api user), if installed
+#   3. the Docker GHCR login -- the same credential `docker pull ghcr.io/...`
+#      uses (inline auth in ~/.docker/config.json, or a credential helper like
+#      docker-credential-desktop). This is why the scripts work locally with no
+#      extra setup whenever `build_rpm.sh` can already pull from GHCR.
+# Exports GITHUB_TOKEN and GITHUB_ACTOR.
+#
+# NOTE: a token from the Docker login may be a PAT scoped only for registry
+# pull. Listing tags / reading sizes works; DELETING tags (prune) needs
+# delete:packages and goes through the GitHub REST API -- if that 403s, set a
+# GITHUB_TOKEN/CR_PAT with delete:packages, or run the prune in CI.
 ghcr_resolve_creds() {
     GITHUB_TOKEN="${GITHUB_TOKEN:-${CR_PAT:-}}"
+    # 2. gh CLI
     if [ -z "${GITHUB_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
         GITHUB_TOKEN="$(gh auth token 2>/dev/null || true)"
+        [ -z "${GITHUB_ACTOR:-}" ] && GITHUB_ACTOR="$(gh api user --jq .login 2>/dev/null || true)"
     fi
-    if [ -z "${GITHUB_ACTOR:-}" ]; then
-        if command -v gh >/dev/null 2>&1; then
-            GITHUB_ACTOR="$(gh api user --jq .login 2>/dev/null || true)"
+    # 3. Docker GHCR credential (inline or via credential helper)
+    if [ -z "${GITHUB_TOKEN:-}" ]; then
+        local cfg="${HOME}/.docker/config.json" helper inline
+        if [ -f "$cfg" ]; then
+            # inline base64 auth?
+            inline=$(python3 -c "import json,base64,sys
+try:
+ a=json.load(open('$cfg')).get('auths',{}).get('ghcr.io',{}).get('auth','')
+ u,_,t=base64.b64decode(a).decode().partition(':') if a else ('','','')
+ print(u+'\t'+t)
+except Exception: print('\t')" 2>/dev/null || printf '\t')
+            GITHUB_ACTOR="${GITHUB_ACTOR:-${inline%%	*}}"
+            GITHUB_TOKEN="${inline##*	}"
+            # credential helper (e.g. docker-credential-desktop)?
+            if [ -z "${GITHUB_TOKEN:-}" ]; then
+                helper=$(python3 -c "import json; print(json.load(open('$cfg')).get('credsStore',''))" 2>/dev/null || true)
+                if [ -n "$helper" ] && command -v "docker-credential-$helper" >/dev/null 2>&1; then
+                    local out; out=$(printf 'ghcr.io' | "docker-credential-$helper" get 2>/dev/null || true)
+                    GITHUB_ACTOR="${GITHUB_ACTOR:-$(printf '%s' "$out" | python3 -c "import json,sys; print(json.load(sys.stdin).get('Username',''))" 2>/dev/null || true)}"
+                    GITHUB_TOKEN="$(printf '%s' "$out" | python3 -c "import json,sys; print(json.load(sys.stdin).get('Secret',''))" 2>/dev/null || true)"
+                fi
+            fi
         fi
-        GITHUB_ACTOR="${GITHUB_ACTOR:-$(whoami)}"
     fi
+    GITHUB_ACTOR="${GITHUB_ACTOR:-$(whoami)}"
     export GITHUB_TOKEN GITHUB_ACTOR
     if [ -z "${GITHUB_TOKEN:-}" ]; then
-        echo "ERROR: no GitHub token. Set GITHUB_TOKEN/CR_PAT, or 'gh auth login'." >&2
-        echo "       (package scopes needed: read:packages, and delete:packages to prune)" >&2
+        echo "ERROR: no GitHub token found (env, gh, or docker login)." >&2
+        echo "       Set GITHUB_TOKEN/CR_PAT, or 'docker login ghcr.io', or run in CI." >&2
         return 1
     fi
 }
