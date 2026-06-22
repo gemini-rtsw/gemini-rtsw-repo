@@ -82,17 +82,27 @@ has_githash() { case "$1" in *.git.*|*.git[0-9a-f]*) return 0 ;; *) return 1 ;; 
 
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
-# Build: groups file with "groupkey<TAB>tag" for prunable (git-hash) tags only.
+# Partition the package's tags:
+#   groups   = prunable (have a .git. hash), as "groupkey<TAB>tag"
+#   protected= no git hash (grandfathered/clean, e.g. epics-base 3.14, asyn-4.44)
+#              -- always kept, never a candidate, but SHOWN so you can see them.
 : > "$WORK/groups"
+: > "$WORK/protected"
 printf '%s\n' "$pkg_tags" | while IFS= read -r t; do
     [ -n "$t" ] || continue
     if has_githash "$t"; then
         printf '%s\t%s\n' "$(hashfree_group "$t")" "$t" >> "$WORK/groups"
+    else
+        echo "$t" >> "$WORK/protected"
     fi
 done
 
 if [ ! -s "$WORK/groups" ]; then
-    echo "No git-hash builds found for ${PKG} (only grandfathered/clean RPMs); nothing prunable."
+    echo "No git-hash builds found for ${PKG}; nothing prunable."
+    if [ -s "$WORK/protected" ]; then
+        echo "Protected (no git hash, never pruned):"
+        sort "$WORK/protected" | sed 's/^/  KEEP  /'
+    fi
     exit 0
 fi
 
@@ -111,10 +121,14 @@ fi
 candidates="$WORK/candidates"; : > "$candidates"
 echo ""
 echo "================ PRUNE PREVIEW: ${PKG} ================"
+if [ -s "$WORK/protected" ]; then
+    echo "PROTECTED (no git hash -- always kept, never offered for deletion):"
+    sort "$WORK/protected" | sed 's/^/  KEEP  /'
+    echo ""
+fi
 echo "Every git-hash build below is a candidate. Builds are grouped by"
 echo "NVR+EL (same identity, different commit). YOU pick what to delete;"
-echo "default is KEEP. (Grandfathered/clean RPMs without a .git. hash are"
-echo "not shown -- they are never pruned.)"
+echo "default is KEEP."
 cut -f1 "$WORK/groups" | sort -u | while IFS= read -r gk; do
     grp=$(awk -F'\t' -v k="$gk" '$1==k{print $2}' "$WORK/groups" | sort)
     cnt=$(printf '%s\n' "$grp" | grep -c .)
