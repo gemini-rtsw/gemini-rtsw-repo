@@ -117,51 +117,51 @@ fi
 # NVR+EL so you can see how many share an identity, and YOU choose what to keep.
 # Default is always KEEP; nothing goes without your explicit per-RPM "d".
 #
-# Build a display list: for each group with >1 build, list all its tags.
-candidates="$WORK/candidates"; : > "$candidates"
-echo ""
-echo "================ PRUNE PREVIEW: ${PKG} ================"
-if [ -s "$WORK/protected" ]; then
-    echo "PROTECTED (no git hash -- always kept, never offered for deletion):"
-    sort "$WORK/protected" | sed 's/^/  KEEP  /'
-    echo ""
-fi
-echo "Every git-hash build below is a candidate. Builds are grouped by"
-echo "NVR+EL (same identity, different commit). YOU pick what to delete;"
-echo "default is KEEP."
-cut -f1 "$WORK/groups" | sort -u | while IFS= read -r gk; do
-    grp=$(awk -F'\t' -v k="$gk" '$1==k{print $2}' "$WORK/groups" | sort)
-    cnt=$(printf '%s\n' "$grp" | grep -c .)
-    echo ""
-    echo "  --- group: ${gk} (${cnt} build(s)) ---"
-    printf '%s\n' "$grp" | sed 's/^/      /'
-    printf '%s\n' "$grp" >> "$candidates"
-done
-ncand=$(grep -c . "$candidates" || true)
-echo ""
-echo "======================================================="
-echo "$ncand build(s) across all groups. Confirm each (default = KEEP)."
-echo "Tip: within a group, keep the hash you still build/pin; delete the rest."
-echo ""
+# Write an EDITABLE plan file: every git-hash build pre-marked KEEP, grouped by
+# NVR+EL. You open it, change KEEP -> DELETE on the builds you want removed,
+# save, and close your editor. Untouched lines stay KEEP (default-safe). This
+# is far clearer than a blind per-RPM prompt -- you see every group and every
+# choice at once.
+plan="$WORK/prune-plan.txt"
+{
+    echo "# PRUNE PLAN for: ${PKG}"
+    echo "#"
+    echo "# Change 'KEEP' to 'DELETE' on builds you want to remove, then save & quit."
+    echo "# Lines left as KEEP are kept. Comments (#) ignored. Within each group,"
+    echo "# keep the hash you still build/pin; delete the older ones."
+    if [ -s "$WORK/protected" ]; then
+        echo "#"
+        echo "# PROTECTED (no git hash -- cannot be deleted, shown for reference):"
+        sort "$WORK/protected" | sed 's/^/#   /'
+    fi
+    cut -f1 "$WORK/groups" | sort -u | while IFS= read -r gk; do
+        grp=$(awk -F'\t' -v k="$gk" '$1==k{print $2}' "$WORK/groups" | sort)
+        cnt=$(printf '%s\n' "$grp" | grep -c .)
+        echo ""
+        echo "# --- group: ${gk}  (${cnt} build(s)) ---"
+        printf '%s\n' "$grp" | sed 's/^/KEEP    /'
+    done
+} > "$plan"
 
-# Interactive per-candidate prompt. Default (Enter) = KEEP.
-to_delete="$WORK/to_delete"; : > "$to_delete"
-while IFS= read -r t; do
-    [ -n "$t" ] || continue
-    ans=""
-    printf '  delete %s ? [d/K/q] ' "$t"
-    read -r ans </dev/tty || ans="q"
-    case "$ans" in
-        d|D) echo "$t" >> "$to_delete"; echo "    -> will DELETE" ;;
-        q|Q) echo "    -> quit; proceeding with selections so far"; break ;;
-        *)   echo "    -> keep" ;;
-    esac
-done < <(sort "$candidates")
+ncand=$(grep -cE '^KEEP' "$plan" || true)
+echo ""
+echo "================ PRUNE PLAN: ${PKG} ================"
+echo "$ncand git-hash build(s) in $(cut -f1 "$WORK/groups" | sort -u | wc -l | tr -d ' ') group(s)."
+[ -s "$WORK/protected" ] && echo "$(grep -c . "$WORK/protected") protected (no-git-hash) RPM(s) shown but not deletable."
+echo ""
+echo "Opening the plan in your editor (\${EDITOR:-vi})."
+echo "  -> change KEEP to DELETE for builds to remove, then save & quit."
+printf "Press Enter to edit... "; read -r _ </dev/tty || true
+"${EDITOR:-vi}" "$plan" </dev/tty >/dev/tty 2>&1 || { echo "editor exited non-zero; aborting." >&2; exit 1; }
+
+# Collect lines marked DELETE.
+to_delete="$WORK/to_delete"
+grep -E '^DELETE[[:space:]]' "$plan" | awk '{print $2}' | grep . > "$to_delete" || true
 
 ndel=$(grep -c . "$to_delete" || true)
 echo ""
-if [ "$ndel" -eq 0 ]; then echo "No tags selected for deletion. Done."; exit 0; fi
-echo "About to DELETE these $ndel tag(s):"
+if [ "$ndel" -eq 0 ]; then echo "No builds marked DELETE. Nothing to do."; exit 0; fi
+echo "You marked these $ndel tag(s) for DELETE:"
 sed 's/^/  /' "$to_delete"
 printf 'Type "DELETE" to confirm: '
 read -r final </dev/tty || final=""
