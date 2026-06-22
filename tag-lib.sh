@@ -66,14 +66,38 @@ docker_push_retry() {
     return 1
 }
 
+# ghcr_resolve_creds -- ensure GITHUB_TOKEN + GITHUB_ACTOR are set. Order:
+#   1. existing env (GITHUB_TOKEN / CR_PAT, GITHUB_ACTOR) -- e.g. in CI
+#   2. fall back to the local `gh` CLI (gh auth token / gh api user)
+# So the scripts "just work" locally when you're logged in with `gh`, without
+# manually exporting a token. Exports GITHUB_TOKEN and GITHUB_ACTOR.
+ghcr_resolve_creds() {
+    GITHUB_TOKEN="${GITHUB_TOKEN:-${CR_PAT:-}}"
+    if [ -z "${GITHUB_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
+        GITHUB_TOKEN="$(gh auth token 2>/dev/null || true)"
+    fi
+    if [ -z "${GITHUB_ACTOR:-}" ]; then
+        if command -v gh >/dev/null 2>&1; then
+            GITHUB_ACTOR="$(gh api user --jq .login 2>/dev/null || true)"
+        fi
+        GITHUB_ACTOR="${GITHUB_ACTOR:-$(whoami)}"
+    fi
+    export GITHUB_TOKEN GITHUB_ACTOR
+    if [ -z "${GITHUB_TOKEN:-}" ]; then
+        echo "ERROR: no GitHub token. Set GITHUB_TOKEN/CR_PAT, or 'gh auth login'." >&2
+        echo "       (package scopes needed: read:packages, and delete:packages to prune)" >&2
+        return 1
+    fi
+}
+
 # ghcr_list_rpm_tags -> prints every rpm-* scratch tag (one per line), excluding
 # the rpm-count-* anti-truncation markers. Uses cursor pagination so it can't
-# silently stop early. Needs GITHUB_TOKEN/CR_PAT + GITHUB_ACTOR/whoami.
+# silently stop early. Resolves creds via ghcr_resolve_creds.
 ghcr_list_rpm_tags() {
     local gh_user gh_pass basic bearer url page count last="" all=""
-    gh_user="${GITHUB_ACTOR:-$(whoami)}"
-    gh_pass="${GITHUB_TOKEN:-${CR_PAT:-}}"
-    if [ -z "$gh_pass" ]; then echo "ERROR: set GITHUB_TOKEN (or CR_PAT)" >&2; return 1; fi
+    ghcr_resolve_creds || return 1
+    gh_user="${GITHUB_ACTOR}"
+    gh_pass="${GITHUB_TOKEN}"
     basic=$(printf '%s:%s' "$gh_user" "$gh_pass" | base64 | tr -d '\n')
     bearer=$(curl -s -H "Authorization: Basic $basic" \
         "https://ghcr.io/token?service=ghcr.io&scope=repository:gemini-rtsw/rpm-repo:pull" \

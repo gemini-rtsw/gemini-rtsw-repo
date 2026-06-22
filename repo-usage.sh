@@ -19,9 +19,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/tag-lib.sh"
 
-gh_user="${GITHUB_ACTOR:-$(whoami)}"
-gh_pass="${GITHUB_TOKEN:-${CR_PAT:-}}"
-if [ -z "$gh_pass" ]; then echo "ERROR: set GITHUB_TOKEN (or CR_PAT)" >&2; exit 1; fi
+ghcr_resolve_creds || exit 1
+gh_user="${GITHUB_ACTOR}"
+gh_pass="${GITHUB_TOKEN}"
 basic=$(printf '%s:%s' "$gh_user" "$gh_pass" | base64 | tr -d '\n')
 bearer=$(curl -s -H "Authorization: Basic $basic" \
     "https://ghcr.io/token?service=ghcr.io&scope=repository:gemini-rtsw/rpm-repo:pull" \
