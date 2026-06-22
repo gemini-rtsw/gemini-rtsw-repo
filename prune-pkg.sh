@@ -116,75 +116,59 @@ fi
 nvr_no_el() { printf '%s|%s' "${1%%|*}" "${1##*|}"; }
 
 # Fetch each tag's GHCR upload time (created_at) via the GitHub REST API using
-# the token we already resolved (curl -- no `gh` needed). Map: tag -> iso8601.
-echo "Fetching upload times..."
-created="$WORK/created"; : > "$created"
-python3 - "$GITHUB_TOKEN" "$created" <<'PY' 2>/dev/null || true
-import json,urllib.request,sys
-tok,out=sys.argv[1],sys.argv[2]; page=1; rows=[]
-while True:
-    req=urllib.request.Request(
-        f"https://api.github.com/orgs/gemini-rtsw/packages/container/rpm-repo/versions?per_page=100&page={page}",
-        headers={"Authorization":f"Bearer {tok}","Accept":"application/vnd.github+json"})
-    try: d=json.load(urllib.request.urlopen(req))
-    except Exception: break
-    if not isinstance(d,list) or not d: break
-    for v in d:
-        for t in (v.get('metadata',{}).get('container',{}).get('tags') or []):
-            rows.append((t,v.get('created_at','')))
-    if len(d)<100: break
-    page+=1
-with open(out,'w') as f:
-    for t,c in rows: f.write(f"{t}\t{c}\n")
-PY
-ts_of() { awk -F'\t' -v t="$1" '$1==t{print $2; exit}' "$created"; }
-
-# Choose ONE keeper HASH per nvr_no_el: the build with the newest upload time
-# (consistent across ELs). Then KEEP every tag whose hash == the keeper hash for
-# its nvr_no_el; DELETE the rest. This guarantees el8 and el9 keep the SAME hash
-# (the bug was picking different keepers per EL).
-declare_hash() {  # extract git hash from a tag (after .git. , drop trailing)
+# extract git short-hash from a tag (after .git. , drop el/arch suffix)
+declare_hash() {
     case "$1" in
         *.git.*) local r="${1##*.git.}"; r="${r%%.el[0-9]*}"; r="${r%.x86_64}"; r="${r%.noarch}"; printf '%s' "$r" ;;
         *) printf '' ;;
     esac
 }
 
-# Build: for each nvr_no_el, find keeper hash = hash of the newest-uploaded tag.
+# Find the sibling git repo that actually CONTAINS these hashes. The repo name
+# may differ from the package name (epics-base -> epics-base-7, AbDf1 -> abdf1),
+# so don't guess by name: take one sample hash and find the sibling repo whose
+# git can resolve it. Order hashes by real COMMIT date -- the only reliable
+# "latest" (GHCR upload times were scrambled by the one-time backfill).
+sample_hash=$(cut -f2 "$WORK/groups" | while IFS= read -r t; do declare_hash "$t"; echo; done | grep . | head -1)
+PKG_REPO=""
+for cand in "$SCRIPT_DIR"/../*/; do
+    [ -d "${cand}.git" ] || continue
+    if git -C "$cand" cat-file -e "${sample_hash}^{commit}" 2>/dev/null; then PKG_REPO="${cand%/}"; break; fi
+done
+if [ -z "$PKG_REPO" ]; then
+    echo "ERROR: no sibling git repo resolves '${PKG}' commits (sample ${sample_hash})." >&2
+    echo "       Clone the package's repo beside gemini-rtsw-repo so commit order can be read." >&2
+    exit 1
+fi
+echo "Ordering by git commit date from: $PKG_REPO"
+
+# commit_ct HASH -> commit unix timestamp (0 if not in this repo)
+commit_ct() { git -C "$PKG_REPO" show -s --format='%ct' "${1}^{commit}" 2>/dev/null || true; }
+
+# Keeper per nvr_no_el = the hash with the NEWEST git commit. Hashes not found
+# in git (grandfathered/unknown) get ct 0, so a real commit always wins.
 keeper_hash="$WORK/keeper_hash"; : > "$keeper_hash"   # "nvr_no_el<TAB>hash"
-cut -f1 "$WORK/groups" | sort -u | while IFS= read -r gk; do
-    printf '%s\n' "$(nvr_no_el "$gk")"
-done | sort -u | while IFS= read -r nk; do
-    best="" bts=""
-    # all tags whose nvr_no_el == nk
+cut -f1 "$WORK/groups" | while IFS= read -r gk; do nvr_no_el "$gk"; echo; done \
+    | sort -u | while IFS= read -r nk; do
+    [ -n "$nk" ] || continue
+    best="" bct=-1
     while IFS= read -r t; do
         [ -n "$t" ] || continue
-        tk=$(nvr_no_el "$(hashfree_group "$t")")
-        [ "$tk" = "$nk" ] || continue
-        cts=$(ts_of "$t")
-        if [ -z "$bts" ] || { [ -n "$cts" ] && [ "$cts" \> "$bts" ]; }; then best="$t"; bts="$cts"; fi
+        [ "$(nvr_no_el "$(hashfree_group "$t")")" = "$nk" ] || continue
+        h=$(declare_hash "$t"); [ -n "$h" ] || continue
+        ct=$(commit_ct "$h"); case "$ct" in ''|*[!0-9]*) ct=0 ;; esac
+        if [ "$ct" -gt "$bct" ]; then bct="$ct"; best="$h"; fi
     done < <(cut -f2 "$WORK/groups")
-    printf '%s\t%s\n' "$nk" "$(declare_hash "$best")" >> "$keeper_hash"
+    [ -n "$best" ] && printf '%s\t%s\n' "$nk" "$best" >> "$keeper_hash"
 done
 
-# PROTECT pinned hashes: collect every git short-hash referenced by a sibling
-# repo's spec (../*/*.spec). A hash that any spec pins is LIVE and must never be
-# deleted -- this is what guarantees the in-use build (e.g. f9e3717) is kept
-# even if an arbitrary backfill upload-time made some orphan look "newer".
-# (Scans local checkouts only; off-GitHub consumers are still covered by the
-# final y/N review.)
-pinned="$WORK/pinned"; : > "$pinned"
-grep -rhoE '\.git\.([0-9]+\.)?[0-9a-f]{7,}' "$SCRIPT_DIR"/../*/*.spec 2>/dev/null \
-    | grep -oE '[0-9a-f]{7,}$' | sort -u > "$pinned" || true
-
+# KEEP = the newest-image hash for each NVR (the keeper_hash chosen above by
+# GHCR image creation time, consistent across ELs). DELETE = every older hash.
 keep_list="$WORK/keep"; : > "$keep_list"
 del_list="$WORK/delete"; : > "$del_list"
 while IFS= read -r t; do
     [ -n "$t" ] || continue
     th=$(declare_hash "$t")
-    # 1) pinned by a spec -> always KEEP
-    if [ -n "$th" ] && grep -qxF "$th" "$pinned"; then echo "$t" >> "$keep_list"; continue; fi
-    # 2) else keep the newest-upload hash for this NVR (consistent across ELs)
     nk=$(nvr_no_el "$(hashfree_group "$t")")
     kh=$(awk -F'\t' -v k="$nk" '$1==k{print $2; exit}' "$keeper_hash")
     if [ -n "$kh" ] && [ "$th" = "$kh" ]; then echo "$t" >> "$keep_list"; else echo "$t" >> "$del_list"; fi
