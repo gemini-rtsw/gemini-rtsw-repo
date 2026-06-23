@@ -146,21 +146,39 @@ ghcr_list_rpm_tags() {
     printf '%s\n' "$all" | grep '^rpm-' | grep -v '^rpm-count-' | sort -u | grep . || true
 }
 
-# ghcr_delete_tag <tag> -- delete one scratch tag's package-version from GHCR via
-# the GitHub Packages REST API (the OCI registry has no tag-delete; we resolve
-# the tag to its version id and DELETE that). Needs `gh` authenticated with
-# delete:packages scope, OR GITHUB_TOKEN with packages:write. Org packages use
-# the /orgs/ path. Returns nonzero on failure (caller decides whether fatal).
+# ghcr_delete_tag <tag> -- delete one scratch tag's package-version from GHCR.
+# The OCI registry has no tag-delete, so we resolve the tag to its package-
+# version id via the GitHub REST API and DELETE that version. Uses curl + the
+# resolved GITHUB_TOKEN (NO `gh` -- it may not be installed). The token needs
+# delete:packages scope. Paginates all version pages. Returns nonzero on fail.
 ghcr_delete_tag() {
     local tag="$1" vid
-    # Find the package-version id whose metadata.container.tags includes $tag.
-    vid=$(gh api --paginate \
-        "/orgs/gemini-rtsw/packages/container/rpm-repo/versions" \
-        --jq ".[] | select(.metadata.container.tags[]? == \"${tag}\") | .id" 2>/dev/null | head -1)
+    ghcr_resolve_creds || return 1
+    vid=$(python3 - "$GITHUB_TOKEN" "$tag" <<'PY' 2>/dev/null
+import json,urllib.request,sys
+tok,tag=sys.argv[1],sys.argv[2]; page=1
+while True:
+    req=urllib.request.Request(
+        f"https://api.github.com/orgs/gemini-rtsw/packages/container/rpm-repo/versions?per_page=100&page={page}",
+        headers={"Authorization":f"Bearer {tok}","Accept":"application/vnd.github+json"})
+    try: d=json.load(urllib.request.urlopen(req))
+    except Exception: break
+    if not isinstance(d,list) or not d: break
+    for v in d:
+        if tag in (v.get('metadata',{}).get('container',{}).get('tags') or []):
+            print(v['id']); sys.exit(0)
+    if len(d)<100: break
+    page+=1
+PY
+)
     if [ -z "$vid" ]; then
         echo "  WARN: no version id found for tag $tag (already gone?)" >&2
         return 1
     fi
-    gh api -X DELETE \
-        "/orgs/gemini-rtsw/packages/container/rpm-repo/versions/${vid}" >/dev/null 2>&1
+    # DELETE the version via curl; success = HTTP 204.
+    local code
+    code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+        -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/orgs/gemini-rtsw/packages/container/rpm-repo/versions/${vid}")
+    case "$code" in 20[0-9]) return 0 ;; *) echo "  WARN: delete HTTP $code for $tag" >&2; return 1 ;; esac
 }
