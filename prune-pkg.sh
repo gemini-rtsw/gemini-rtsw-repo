@@ -187,15 +187,49 @@ echo "==================== PRUNE: ${PKG} ===================="
 echo ">> KEEP ($(grep -c . "$keep_list") RPM):"
 sort "$keep_list" | sed 's/^/   keep    /'
 echo ""
-echo ">> DELETE ($ndel old-hash RPM):"
-if [ "$ndel" -eq 0 ]; then echo "   (nothing -- every NVR has only one build)"; fi
-sort "$del_list" | sed 's/^/   DELETE  /'
+if [ "$ndel" -eq 0 ]; then
+    echo ">> DELETE (0): nothing -- every NVR has only one build."
+    echo "======================================================="
+    echo "Nothing to prune."; exit 0
+fi
+
+# Numbered DELETE list -- scroll through it and pick any to EXCLUDE (keep).
+sort "$del_list" > "$WORK/del_sorted"
+echo ">> DELETE candidates ($ndel) -- numbered:"
+nl -w3 -s'  ' "$WORK/del_sorted" | sed 's/^/   /'
 echo "======================================================="
-if [ "$ndel" -eq 0 ]; then echo "Nothing to prune."; exit 0; fi
 echo ""
-printf 'Delete the %s DELETE rpm(s) above and keep the rest? [y/N] ' "$ndel"
-read -r ans </dev/tty || ans="n"
-case "$ans" in y|Y|yes|YES) ;; *) echo "Aborted; nothing deleted."; exit 0 ;; esac
+echo "Enter the NUMBERS to EXCLUDE (keep), space-separated (e.g. 2 5 9),"
+printf 'or press Enter to delete ALL listed: '
+read -r picks </dev/tty || picks=""
+
+# Move excluded numbers from delete -> keep.
+final_del="$WORK/final_del"; : > "$final_del"
+i=0
+while IFS= read -r line; do
+    i=$((i+1))
+    keepit=0
+    for p in $picks; do [ "$p" = "$i" ] && keepit=1 && break; done
+    if [ "$keepit" -eq 1 ]; then echo "$line" >> "$keep_list"; else echo "$line" >> "$final_del"; fi
+done < "$WORK/del_sorted"
+del_list="$final_del"
+ndel=$(grep -c . "$del_list" || true)
+
+echo ""
+if [ "$ndel" -eq 0 ]; then echo "Everything excluded; nothing to delete."; exit 0; fi
+
+# ---- VERIFY SCREEN (final confirmation before any deletion) ----
+echo "##############################################################"
+echo "#                    FINAL VERIFY -- ${PKG}"
+echo "#  KEEPING $(grep -c . "$keep_list") RPM.  DELETING the $ndel below."
+echo "#  This permanently removes these scratch tags from GHCR."
+echo "##############################################################"
+sed 's/^/   DELETE  /' "$del_list"
+echo "##############################################################"
+echo ""
+printf 'Type DELETE (all caps) to remove these %s rpm(s), anything else aborts: ' "$ndel"
+read -r ans </dev/tty || ans=""
+if [ "$ans" != "DELETE" ]; then echo "Aborted; nothing deleted."; exit 0; fi
 
 to_delete="$del_list"
 echo "Deleting tags..."
