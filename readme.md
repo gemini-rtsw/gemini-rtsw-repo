@@ -62,7 +62,7 @@ based on `--el`:
 | `sync_repo.sh` | **Publish.** Rebuild `:latest-el8` / `:latest-el9` **purely from the `rpm-*` tags** (no merge-pull of the old image). Safe to run standalone to **heal**. |
 | `backfill-tags.sh` | **One-time migration.** Enumerate every RPM in the current images (incl. grandfathered) and push each as a per-NVRA tag, so the tags become the complete source of truth. |
 | `repo-usage.sh` | **Space report.** Sum scratch-tag sizes per package, biggest first, so you can spot heavy packages (e.g. epics-base) to prune. |
-| `prune-pkg.sh` | **Targeted prune.** For ONE package, keep the newest build per NVR-group and interactively delete older git-hash builds (preview + per-RPM confirm), then rebuild `:latest`. |
+| `prune-pkg.sh` | **Targeted prune.** For ONE package, keep the newest build per NVR (by container upload time), interactively exclude/confirm, delete the chosen old scratch tags, then **dispatch the `rebuild-latest` workflow** (rebuild runs on a GitHub runner, not locally). |
 | `tag-lib.sh` | Shared helpers: `rpm_tag_for`, tag listing, push-retry, GHCR tag delete. |
 | `list_rpms.sh` | List RPMs in an image |
 | `download_from_gitlab.sh` | One-time migration: pull all RPMs out of the old GitLab registry into `rpms/` |
@@ -111,7 +111,9 @@ rtems are the heavy ones).
 For that one package it keeps the **newest build per NVR-group** (by GHCR
 creation time) and offers the **older git-hashes** as prune candidates. It shows
 a preview, then asks **per RPM** (default = keep); after you confirm, it deletes
-the chosen scratch tags and rebuilds the served images.
+the chosen scratch tags, then **dispatches the `rebuild-latest` GitHub workflow**
+(with allow_shrink) so the served image is rebuilt **on a runner** -- the local
+machine never pulls/pushes the multi-GB image.
 
 > **Safety — you are the safety net.** There is NO automated "is this pinned?"
 > check: pins live across many branches/release tags and even in repos OUTSIDE

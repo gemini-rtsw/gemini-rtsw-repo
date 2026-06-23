@@ -252,8 +252,20 @@ while IFS= read -r t; do
 done < "$to_delete"
 
 echo ""
-echo "Rebuilding :latest so pruned RPMs leave the served repo..."
-echo "(prune-aware: the anti-truncation guard is allowed to shrink this once)"
-chmod +x "$SCRIPT_DIR/sync_repo.sh"
-PRUNE_REBUILD=1 "$SCRIPT_DIR/sync_repo.sh"
-echo "Prune complete for ${PKG}."
+echo "Triggering the rebuild-latest workflow on GitHub (runs on a runner --"
+echo "we do NOT rebuild the multi-GB images locally)..."
+# Dispatch the rebuild-latest workflow with allow_shrink=true so its sync_repo.sh
+# run is prune-aware (the anti-truncation guard permits this intentional shrink).
+# Needs a token with 'workflow'/actions:write scope.
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+    -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/gemini-rtsw/gemini-rtsw-repo/actions/workflows/rebuild-latest.yml/dispatches" \
+    -d '{"ref":"master","inputs":{"allow_shrink":"true"}}')
+case "$code" in
+    20[0-9]) echo "Dispatched. Watch: Actions -> rebuild-latest. The pruned RPMs leave"
+             echo "the served images once it completes." ;;
+    *) echo "WARN: workflow dispatch returned HTTP $code." >&2
+       echo "  Tags were deleted, but the images weren't rebuilt. Trigger it manually:" >&2
+       echo "  Actions -> rebuild-latest -> Run workflow (allow_shrink = true)." >&2 ;;
+esac
+echo "Prune complete for ${PKG} (deletions done; rebuild running on GitHub)."

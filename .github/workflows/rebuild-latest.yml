@@ -7,6 +7,11 @@ name: rebuild-latest
 
 on:
   workflow_dispatch:
+    inputs:
+      allow_shrink:
+        description: 'Allow the rebuild to shrink (use after a prune that removed tags)'
+        required: false
+        default: 'false'
 
 permissions:
   contents: read
@@ -44,6 +49,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
+          # Prune-aware: when dispatched after a prune, allow the image to shrink
+          # past the anti-truncation guard.
+          PRUNE_REBUILD: ${{ inputs.allow_shrink == 'true' && '1' || '0' }}
         run: |
           df -h /
           chmod +x sync_repo.sh
