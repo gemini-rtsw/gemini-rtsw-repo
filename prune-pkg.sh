@@ -149,6 +149,16 @@ with open(out,'w') as f:
 PY
 ct_of() { awk -F'\t' -v k="$1" '$1==k{print $2; exit}' "$created"; }
 
+# sort_by_date FILE -> prints the tags in FILE newest-upload first. Prepends
+# each tag's upload time, numeric-sorts descending, strips the time.
+sort_by_date() {
+    while IFS= read -r t; do
+        [ -n "$t" ] || continue
+        c=$(ct_of "$t"); case "$c" in ''|*[!0-9]*) c=0 ;; esac
+        printf '%s\t%s\n' "$c" "$t"
+    done < "$1" | sort -t$'\t' -k1,1nr | cut -f2-
+}
+
 # Keeper per NVR (ignoring EL, so el8+el9 keep the SAME hash) = the hash whose
 # container was uploaded most recently. Rank by upload time.
 keeper_hash="$WORK/keeper_hash"; : > "$keeper_hash"   # "nvr_no_el<TAB>hash"
@@ -184,8 +194,8 @@ ndel=$(grep -c . "$del_list" || true)
 
 echo ""
 echo "==================== PRUNE: ${PKG} ===================="
-echo ">> KEEP ($(grep -c . "$keep_list") RPM):"
-sort "$keep_list" | sed 's/^/   keep    /'
+echo ">> KEEP ($(grep -c . "$keep_list") RPM), newest first:"
+sort_by_date "$keep_list" | sed 's/^/   keep    /'
 echo ""
 if [ "$ndel" -eq 0 ]; then
     echo ">> DELETE (0): nothing -- every NVR has only one build."
@@ -193,9 +203,9 @@ if [ "$ndel" -eq 0 ]; then
     echo "Nothing to prune."; exit 0
 fi
 
-# Numbered DELETE list -- scroll through it and pick any to EXCLUDE (keep).
-sort "$del_list" > "$WORK/del_sorted"
-echo ">> DELETE candidates ($ndel) -- numbered:"
+# Numbered DELETE list (newest upload first) -- scroll and pick any to EXCLUDE.
+sort_by_date "$del_list" > "$WORK/del_sorted"
+echo ">> DELETE candidates ($ndel) -- numbered, newest first:"
 nl -w3 -s'  ' "$WORK/del_sorted" | sed 's/^/   /'
 echo "======================================================="
 echo ""
@@ -221,10 +231,13 @@ if [ "$ndel" -eq 0 ]; then echo "Everything excluded; nothing to delete."; exit 
 # ---- VERIFY SCREEN (final confirmation before any deletion) ----
 echo "##############################################################"
 echo "#                    FINAL VERIFY -- ${PKG}"
-echo "#  KEEPING $(grep -c . "$keep_list") RPM.  DELETING the $ndel below."
-echo "#  This permanently removes these scratch tags from GHCR."
+echo "#  This permanently removes the DELETE scratch tags from GHCR."
 echo "##############################################################"
-sed 's/^/   DELETE  /' "$del_list"
+echo "## KEEP ($(grep -c . "$keep_list")), newest first:"
+sort_by_date "$keep_list" | sed 's/^/   keep    /'
+echo "##############################################################"
+echo "## DELETE ($ndel), newest first:"
+sort_by_date "$del_list" | sed 's/^/   DELETE  /'
 echo "##############################################################"
 echo ""
 printf 'Type DELETE (all caps) to remove these %s rpm(s), anything else aborts: ' "$ndel"
