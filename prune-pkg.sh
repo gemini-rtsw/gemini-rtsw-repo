@@ -53,36 +53,37 @@ n=$(printf '%s\n' "$pkg_tags" | grep -c . || true)
 echo "  found $n tag(s) for ${PKG}"
 if [ "$n" -eq 0 ]; then echo "Nothing to do."; exit 0; fi
 
-# group_key TAG -> "name|version-releasebase|el|arch" with the .git.<hash>
-# stripped from the release. Tags look like:
-#   rpm-epics-base-devel-7.0.7-0.git.f9e3717.el8.x86_64
-#   rpm-slalib-devel-1.9.7-6.git.67.7872e05.el8.x86_64
-#   rpm-asyn-4.44-1.x86_64                     (no el, no git hash)
-# We strip a trailing ".el<N>.<arch>" off, remember el+arch, then strip a
-# ".git.*" or ".git<...>" segment from what's left to get the hash-free key.
+# tag_hash TAG -> the git short-hash in the tag, or "" if none.
+# A hash is a 7-40 char hex token that CONTAINS at least one letter a-f (so it
+# can't be confused with a pure-numeric version/release field). This covers
+# every release format we use:
+#   epics-base-7.0.7-0.git.f9e3717   -> f9e3717   (.git.<hash>)
+#   rtems-6.2-0.83035d4              -> 83035d4   (0.<hash>, no .git.)
+#   rtems-6-d111efb.1_rc2           -> d111efb
+#   asyn-4.44-1 / epics-base-3.14.12-8 -> ""       (grandfathered, no hash)
+tag_hash() {
+    printf '%s\n' "$1" | grep -oE '[0-9a-f]{7,40}' | grep -E '[a-f]' | grep -vE '^[0-9]+$' | head -1
+}
+
+# hashfree_group TAG -> "rel|el|arch" identity with the hash blanked + EL
+# removed, so different builds of the same package/version (and el8 vs el9)
+# collapse to one group.
 hashfree_group() {
-    local t="$1" body el arch rel
-    body="${t#rpm-}"                       # drop leading rpm-
-    # peel arch (last dot-field) and el (the .elN. before arch), if present
-    arch="${body##*.}"                      # x86_64 / noarch
-    body="${body%.*}"                       # drop .arch
+    local t="$1" body el arch h
+    body="${t#rpm-}"
+    arch="${body##*.}"; body="${body%.*}"          # peel .arch
     case "$body" in
         *.el[0-9]*) el="el${body##*.el}"; el="${el%%.*}"; el="el${el#el}"; body="${body%.el[0-9]*}" ;;
         *) el="noel" ;;
     esac
-    # body is now name-version-release(.git.<hash>?). Strip the git-hash segment.
-    # The hash segment is ".git." onward (covers .git.<h> and .git.<n>.<h>).
-    case "$body" in
-        *.git.*) rel="${body%%.git.*}" ;;   # everything before .git.
-        *.git*)  rel="${body%%.git*}" ;;    # rare ".git<h>" malformed form
-        *)       rel="$body" ;;             # no git hash -> grandfathered
-    esac
-    printf '%s|%s|%s' "$rel" "$el" "$arch"
+    h=$(tag_hash "$body")
+    [ -n "$h" ] && body=$(printf '%s' "$body" | sed "s/$h/HASH/")
+    printf '%s|%s|%s' "$body" "$el" "$arch"
 }
 
-# has_githash TAG -> 0 if the tag carries a .git hash (prunable), 1 if not
+# has_githash TAG -> 0 if the tag carries a hash (prunable), 1 if not
 # (grandfathered/clean -- never a candidate).
-has_githash() { case "$1" in *.git.*|*.git[0-9a-f]*) return 0 ;; *) return 1 ;; esac; }
+has_githash() { [ -n "$(tag_hash "$1")" ]; }
 
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
@@ -115,13 +116,9 @@ fi
 # group key from hashfree_group is "rel|el|arch"; drop the middle (el) field.
 nvr_no_el() { printf '%s|%s' "${1%%|*}" "${1##*|}"; }
 
-# extract git short-hash from a tag (after .git. , drop el/arch suffix)
-declare_hash() {
-    case "$1" in
-        *.git.*) local r="${1##*.git.}"; r="${r%%.el[0-9]*}"; r="${r%.x86_64}"; r="${r%.noarch}"; printf '%s' "$r" ;;
-        *) printf '' ;;
-    esac
-}
+# extract the git short-hash from a tag (handles .git.<h> and 0.<h> forms);
+# delegates to tag_hash so all hash detection stays in one place.
+declare_hash() { tag_hash "$1"; }
 
 # LATEST = newest CONTAINER (the GHCR scratch image's upload time). No git, no
 # GitHub repo, no specs -- just the registry. Fetch every tag's created_at once
