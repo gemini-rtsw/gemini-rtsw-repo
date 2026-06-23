@@ -1,0 +1,73 @@
+name: prune
+
+# Delete a chosen set of rpm-* scratch tags, then rebuild the served image.
+# Dispatched by prune-pkg.sh after you interactively pick what to delete -- the
+# local machine only figures out the list; ALL GHCR mutations happen here on a
+# runner (proper token + bandwidth; the local box never pushes the big image).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: 'Space-separated rpm-* tags to DELETE'
+        required: true
+      allow_shrink:
+        description: 'Allow the post-delete rebuild to shrink the image'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: read
+  packages: write
+  # delete a package version + dispatch -- the runner GITHUB_TOKEN covers these.
+
+jobs:
+  prune:
+    name: Delete tags + rebuild
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Free up disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete the chosen tags
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          TAGS: ${{ inputs.tags }}
+        run: |
+          chmod +x tag-lib.sh
+          . ./tag-lib.sh
+          fail=0
+          for t in $TAGS; do
+            [ -n "$t" ] || continue
+            if ghcr_delete_tag "$t"; then echo "  deleted $t"; else echo "  FAILED $t"; fail=1; fi
+          done
+          [ "$fail" -eq 0 ] || echo "::warning::some tags failed to delete (see above)"
+
+      - name: Rebuild :latest (prune-aware)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          PRUNE_REBUILD: ${{ inputs.allow_shrink == 'true' && '1' || '0' }}
+        run: |
+          df -h /
+          chmod +x sync_repo.sh
+          ./sync_repo.sh

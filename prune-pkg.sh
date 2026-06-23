@@ -244,28 +244,41 @@ printf 'Type DELETE (all caps) to remove these %s rpm(s), anything else aborts: 
 read -r ans </dev/tty || ans=""
 if [ "$ans" != "DELETE" ]; then echo "Aborted; nothing deleted."; exit 0; fi
 
-to_delete="$del_list"
-echo "Deleting tags..."
-while IFS= read -r t; do
-    [ -n "$t" ] || continue
-    if ghcr_delete_tag "$t"; then echo "  deleted $t"; else echo "  FAILED  $t (continuing)"; fi
-done < "$to_delete"
+# Hand off to CI: the local box only picked the list. Build a space-joined tag
+# list and dispatch the `prune` workflow, which deletes the tags AND rebuilds
+# the image ON A RUNNER (proper token + bandwidth; nothing heavy runs locally).
+tags_str=$(tr '\n' ' ' < "$del_list" | sed 's/  */ /g; s/^ //; s/ $//')
+
+# GUARD: workflow_dispatch inputs are limited (GitHub caps a single input around
+# 65535 chars / the whole inputs object similarly). Refuse rather than send a
+# truncated list that would leave tags un-deleted or mis-parsed. ~50 chars/tag,
+# so the practical ceiling is well over a thousand tags -- but check explicitly.
+LIMIT=60000
+len=${#tags_str}
+if [ "$len" -gt "$LIMIT" ]; then
+    echo "" >&2
+    echo "WARNING: the delete list is too large to send to the CI job in one go." >&2
+    echo "  ($ndel tags, ${len} chars; the workflow_dispatch input limit is ~${LIMIT})." >&2
+    echo "  Nothing was deleted. Prune in smaller batches (exclude more this run)," >&2
+    echo "  or run fewer NVRs at a time." >&2
+    exit 1
+fi
 
 echo ""
-echo "Triggering the rebuild-latest workflow on GitHub (runs on a runner --"
-echo "we do NOT rebuild the multi-GB images locally)..."
-# Dispatch the rebuild-latest workflow with allow_shrink=true so its sync_repo.sh
-# run is prune-aware (the anti-truncation guard permits this intentional shrink).
-# Needs a token with 'workflow'/actions:write scope.
+echo "Dispatching the 'prune' workflow on GitHub (deletes tags + rebuilds image"
+echo "on a runner -- nothing heavy runs locally). Needs a token with 'workflow'"
+echo "(actions:write) scope."
+payload=$(python3 -c "import json,sys; print(json.dumps({'ref':'master','inputs':{'tags':sys.argv[1],'allow_shrink':'true'}}))" "$tags_str")
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
     -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
-    "https://api.github.com/repos/gemini-rtsw/gemini-rtsw-repo/actions/workflows/rebuild-latest.yml/dispatches" \
-    -d '{"ref":"master","inputs":{"allow_shrink":"true"}}')
+    "https://api.github.com/repos/gemini-rtsw/gemini-rtsw-repo/actions/workflows/prune.yml/dispatches" \
+    -d "$payload")
 case "$code" in
-    20[0-9]) echo "Dispatched. Watch: Actions -> rebuild-latest. The pruned RPMs leave"
-             echo "the served images once it completes." ;;
-    *) echo "WARN: workflow dispatch returned HTTP $code." >&2
-       echo "  Tags were deleted, but the images weren't rebuilt. Trigger it manually:" >&2
-       echo "  Actions -> rebuild-latest -> Run workflow (allow_shrink = true)." >&2 ;;
+    20[0-9]) echo "Dispatched. Watch: Actions -> prune. It deletes the $ndel tag(s) and"
+             echo "rebuilds the image. Nothing was changed locally." ;;
+    *) echo "WARN: prune-workflow dispatch returned HTTP $code -- nothing deleted." >&2
+       echo "  Likely the token lacks 'workflow' scope, or prune.yml isn't on master yet." >&2
+       echo "  You can run it manually: Actions -> prune -> Run workflow, paste the tags." >&2
+       exit 1 ;;
 esac
-echo "Prune complete for ${PKG} (deletions done; rebuild running on GitHub)."
+echo "Prune dispatched for ${PKG}."
