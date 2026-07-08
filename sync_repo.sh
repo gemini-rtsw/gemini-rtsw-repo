@@ -94,14 +94,28 @@ fi
 echo "2. Pulling $TAG_COUNT tags into $RPM_DIR ..."
 PROGRESS_FILE=$(mktemp)
 pull_one() {
-    local t="$1"
-    docker pull -q "${RPM_REPO_IMAGE}:${t}" >/dev/null
-    local cid; cid=$(docker create "${RPM_REPO_IMAGE}:${t}" x)
-    docker cp "${cid}:/." "$RPM_DIR/" >/dev/null 2>&1 || true
-    docker rm "$cid" >/dev/null
-    # Progress: append one line (atomic, no read-modify-write -> race-safe).
-    # The main shell counts lines below to report progress.
-    echo . >> "$PROGRESS_FILE"
+    local t="$1" attempt cid
+    # Retry the create+cp: a transient docker cp failure used to be swallowed
+    # (`|| true`), silently dropping that tag's RPM(s) -- the publish then hit
+    # the anti-truncation guard with counts like 836<837 and failed the whole
+    # job. Three attempts, loud failure if all fail (set -e aborts the sync,
+    # which is the safe outcome: never publish an incomplete repo).
+    for attempt in 1 2 3; do
+        docker pull -q "${RPM_REPO_IMAGE}:${t}" >/dev/null
+        cid=$(docker create "${RPM_REPO_IMAGE}:${t}" x)
+        if docker cp "${cid}:/." "$RPM_DIR/" >/dev/null 2>&1; then
+            docker rm "$cid" >/dev/null
+            # Progress: append one line (atomic, no read-modify-write -> race-safe).
+            # The main shell counts lines below to report progress.
+            echo . >> "$PROGRESS_FILE"
+            return 0
+        fi
+        docker rm "$cid" >/dev/null 2>&1 || true
+        echo "  retry $attempt/3: docker cp failed for tag $t" >&2
+        sleep $((attempt * 2))
+    done
+    echo "ERROR: could not extract tag $t after 3 attempts" >&2
+    return 1
 }
 export -f pull_one
 export RPM_REPO_IMAGE RPM_DIR PROGRESS_FILE
