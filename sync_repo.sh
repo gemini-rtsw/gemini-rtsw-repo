@@ -131,7 +131,7 @@ fi
 # --- bucket/guard/build/push helper ---------------------------------------
 NUM_BUCKETS=32
 DOCKERFILE="$SCRIPT_DIR/Dockerfile.rpm-repo"
-COPY_BUCKETS=$(grep -cE "buckets/b[0-9][0-9]/" "$DOCKERFILE")
+COPY_BUCKETS=$(grep -cE "rpm-repo/b[0-9][0-9]/" "$DOCKERFILE")
 if [ "$COPY_BUCKETS" -ne "$NUM_BUCKETS" ]; then
     echo "ERROR: NUM_BUCKETS=$NUM_BUCKETS but Dockerfile.rpm-repo COPYs $COPY_BUCKETS buckets." >&2
     exit 1
@@ -262,6 +262,35 @@ build_one() {
 
     echo "[$tag] building + pushing $RPM_REPO_IMAGE:$tag ($bucketed RPMs)..."
     rm -rf "$BUILD_DIR"; mv "$bdir" "$BUILD_DIR"
+
+    # createrepo ON THE RUNNER over a hardlinked flat view (same filesystem ->
+    # ~zero extra disk), shipping only repodata/ into the build context. This
+    # used to run inside the docker build, where cp -l cannot hardlink across
+    # overlay layers: it silently fell back to cp -a and duplicated the entire
+    # multi-GB set in a layer -- ENOSPC once the repo outgrew ~1/3 of the
+    # runner disk. The flat dir is removed before docker build so it never
+    # bloats the context.
+    local flat="./flat-${tag}"
+    rm -rf "$flat"; mkdir -p "$flat"
+    for d in "$BUILD_DIR"/b*/; do
+        cp -l "$d"*.rpm "$flat/" 2>/dev/null || cp "$d"*.rpm "$flat/" 2>/dev/null || true
+    done
+    local flat_n; flat_n=$(find "$flat" -maxdepth 1 -name '*.rpm' | wc -l | tr -d ' ')
+    if [ "$flat_n" -ne "$bucketed" ]; then
+        echo "ERROR [$tag]: flat view has $flat_n RPM(s), expected $bucketed." >&2; exit 1
+    fi
+    if command -v createrepo_c >/dev/null 2>&1; then
+        createrepo_c "$flat"
+    else
+        # No native createrepo_c (e.g. ubuntu runner / macOS): run it in a
+        # rocky container over a bind mount, then chown so the runner user can
+        # clean up the root-owned repodata afterwards.
+        docker run --rm -v "$(cd "$flat" && pwd)":/flat rockylinux:9 \
+            bash -c "dnf install -y -q createrepo_c >/dev/null && createrepo_c /flat && chown -R $(id -u):$(id -g) /flat/repodata"
+    fi
+    [ -d "$flat/repodata" ] || { echo "ERROR [$tag]: createrepo produced no repodata." >&2; exit 1; }
+    rm -rf "$BUILD_DIR/repodata"; mv "$flat/repodata" "$BUILD_DIR/repodata"
+    rm -rf "$flat"
     # The RPMs now live in $BUILD_DIR (bucketed). $RPM_DIR is a redundant copy of
     # the same multi-GB set; free it before the build so the docker daemon has
     # headroom for the build context + overlay. Safe in combined mode (one image

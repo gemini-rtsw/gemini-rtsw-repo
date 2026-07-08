@@ -7,3 +7,4 @@ rpms/
 *.md
 *.sh
 ethernet-vpnkit.sock
+flat-*/
