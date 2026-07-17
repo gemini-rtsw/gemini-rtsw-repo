@@ -24,10 +24,11 @@ On hosts where you can't write to `/etc/yum.repos.d/` directly (e.g. sudo is
 restricted to `dnf`), let dnf create the repo file instead:
 
     sudo dnf config-manager --add-repo http://localhost:8080/rpm-repo/
-    sudo dnf config-manager --save --setopt='localhost_8080_rpm-repo.gpgcheck=0'
+    dnf repolist    # find the generated repo id (e.g. 8080_rpm-repo_)
+    sudo dnf config-manager --save --setopt='<repo-id>.gpgcheck=0'
 
-(Needs `dnf-plugins-core`. The repo id `localhost_8080_rpm-repo` is derived
-from the URL; check with `dnf repolist`.)
+(Needs `dnf-plugins-core`. The repo id is derived from the URL and varies by
+dnf version — use whatever `dnf repolist` shows.)
 
 In a Dockerfile (with the repo container on a Docker network):
 
