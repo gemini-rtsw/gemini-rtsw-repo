@@ -20,6 +20,15 @@ Start the repo container and point dnf at it:
     dnf makecache --refresh
     dnf install PACKAGE_NAME
 
+On hosts where you can't write to `/etc/yum.repos.d/` directly (e.g. sudo is
+restricted to `dnf`), let dnf create the repo file instead:
+
+    sudo dnf config-manager --add-repo http://localhost:8080/rpm-repo/
+    sudo dnf config-manager --save --setopt='localhost_8080_rpm-repo.gpgcheck=0'
+
+(Needs `dnf-plugins-core`. The repo id `localhost_8080_rpm-repo` is derived
+from the URL; check with `dnf repolist`.)
+
 In a Dockerfile (with the repo container on a Docker network):
 
     ARG RPM_REPO_URL=http://rpm-repo:8080/rpm-repo/
