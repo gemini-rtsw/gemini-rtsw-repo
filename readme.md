@@ -11,41 +11,33 @@ Registry (GHCR). Two layers:
 
 ## Using the repository
 
-Start the repo container and point dnf at it:
+**1. Start the container:**
 
     docker run -d --name rpm-repo -p 8080:8080 ghcr.io/gemini-rtsw/rpm-repo:latest
 
-    echo -e "[rpm-repo]\nname=RPM Repository\nbaseurl=http://localhost:8080/rpm-repo/\nenabled=1\ngpgcheck=0" \
-        > /etc/yum.repos.d/rpm-repo.repo
-    dnf makecache --refresh
-    dnf install PACKAGE_NAME
+**2. Point dnf at it** — write this to `/etc/yum.repos.d/rpm-repo.repo` (as root):
 
-On hosts where you can't write to `/etc/yum.repos.d/` directly (e.g. sudo is
-restricted to `dnf`), let dnf create the repo file instead:
+    [rpm-repo]
+    name=RPM Repository
+    baseurl=http://localhost:8080/rpm-repo/
+    enabled=1
+    gpgcheck=0
+
+If you have no root shell (sudo only for `dnf`), let dnf write it instead:
 
     sudo dnf config-manager --add-repo http://localhost:8080/rpm-repo/
-    dnf repolist    # find the generated repo id (e.g. 8080_rpm-repo_)
-    sudo dnf config-manager --save --setopt='<repo-id>.gpgcheck=0'
+    sudo dnf config-manager --save --setopt='<repo-id>.gpgcheck=0'   # id from `dnf repolist`
 
-(Needs `dnf-plugins-core`. The repo id is derived from the URL and varies by
-dnf version — use whatever `dnf repolist` shows.)
+**3.** `dnf install PACKAGE_NAME`
 
-In a Dockerfile (with the repo container on a Docker network):
-
-    ARG RPM_REPO_URL=http://rpm-repo:8080/rpm-repo/
-    RUN echo -e "[rpm-repo]\nname=RPM Repo\nbaseurl=${RPM_REPO_URL}\nenabled=1\ngpgcheck=0" \
-        > /etc/yum.repos.d/rpm-repo.repo
+In a Dockerfile: same repo file, with `baseurl=http://rpm-repo:8080/rpm-repo/`
+(the repo container's name on the Docker network).
 
 Local package builds (via `gemini-rtsw-ci/build_rpm.sh`) pull `:latest`
-automatically to resolve dependencies — no manual setup.
+automatically — no setup.
 
-> **Note on `:latest-el8` / `:latest-el9`.** An earlier design split the repo
-> into per-EL images. That was **shelved** — at this migration stage almost
-> every package is el8-only, so the split duplicated nearly everything into both
-> images (no size win) and doubled build cost. The current model is a **single
-> combined `:latest`**. The split code still lives in `sync_repo.sh` (dormant,
-> `build_one` with an EL filter) to revisit once el9 has real package coverage.
-> Any leftover `:latest-el8`/`:latest-el9` tags in GHCR are stale; ignore them.
+> Ignore any `:latest-el8` / `:latest-el9` tags in GHCR — a shelved per-EL
+> split (code dormant in `sync_repo.sh`). The only served image is `:latest`.
 
 ## Scripts
 
