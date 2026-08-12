@@ -46,10 +46,10 @@ automatically — no setup.
 | `upload-rpm.sh` | **Register RPM(s).** Push each RPM as its own `rpm-<NVRA>` scratch tag. No flag → also publishes (calls `sync_repo.sh`). `--tag-only` → push tags, skip publish (CI build legs use this). |
 | `sync_repo.sh` | **Publish `:latest`.** Rebuild the served image **purely from the `rpm-*` scratch tags**. Single writer; safe to run standalone to **heal**. |
 | `repo-usage.sh` | **Space report.** Per-package tag count + total size, biggest first — find what to prune. |
-| `prune-pkg.sh` | **Targeted prune.** For ONE package: list builds, interactively exclude, verify, then **dispatch the CI `prune` workflow** to delete tags + rebuild (runs on a runner, not locally). |
+| `prune-pkg.sh` | **Delete scratch tags by name** (globs ok). Shows the list, you type `DELETE` then `y`, and it dispatches the CI `prune` workflow. Name everything in one run — each run costs one `:latest` rebuild. |
 | `backfill-tags.sh` | **One-time migration.** Push every RPM in the served image(s) — including grandfathered ones — as a per-NVRA scratch tag, so the tags become the complete source of truth. Already run. |
 | `tag-lib.sh` | Shared helpers: credential resolution, tag listing, push-retry, tag delete. Sourced by the others. |
-| `list_rpms.sh` | List RPMs in an image. |
+| `list_rpms.sh` | **List the scratch tags**, one line per RPM, with size. Optional name filter. Nothing is pulled. |
 | `download_from_gitlab.sh` | One-time: pull RPMs out of the old GitLab registry. Historical. |
 
 ## Workflows (`.github/workflows/`)
@@ -60,7 +60,7 @@ with the ambient `GITHUB_TOKEN`, so no local token or bandwidth is needed.
 | Workflow | What it does |
 |----------|--------------|
 | `rebuild-latest` | Rebuild + push `:latest` from all scratch tags (heal / force-rebuild). Optional `allow_shrink` input for prune-aware rebuilds. |
-| `prune` | Delete a given set of tags, then rebuild `:latest`. Dispatched by `prune-pkg.sh` (or run manually, pasting the tag list). |
+| `prune` | Delete a given set of tags. Rebuilds `:latest` only if the `rebuild` input is `true`. Dispatched by `prune-pkg.sh` (or run manually, pasting the tag list). |
 | `backfill-tags` | One-time backfill (see above). |
 | `repo-usage` | Print the space report on a runner. |
 
@@ -97,39 +97,36 @@ eventually strains runner disk.
 
     ./repo-usage.sh
 
-**2. Prune old builds of a heavy package (e.g. epics-base, rtems):**
+**2. List every version, one line each, with its size:**
 
-    ./prune-pkg.sh epics-base
+    ./list_rpms.sh epics-base
 
-It lists the package's builds grouped by NVR, **keeps the newest build per NVR**
-(by container upload time, consistent across ELs) plus all grandfathered/clean
-(no-`.git.`) RPMs, and offers the older builds for deletion. You:
+    epics-base-7.0.7-0.git.5fb1f41.el8.x86_64      528.0MB
+    epics-base-7.0.7-0.git.f9e3717.el8.x86_64      528.0MB
+    epics-base-el9                                 507.1MB  [bundle: holds several RPMs]
 
-  - scroll the **numbered DELETE list** (newest first),
-  - type the **numbers to EXCLUDE** (rescue any you still need),
-  - review the **final verify screen** (KEEP + DELETE),
-  - type **`DELETE`** to confirm.
+**3. Delete the ones you don't want, by name:**
 
-The local script only *picks* the list — it then **dispatches the `prune` CI
-workflow**, which deletes the tags and rebuilds `:latest` **on a runner**. The
-local machine never deletes or pushes the big image. If the list is too large
-for a workflow input, it aborts with a warning (prune in smaller batches).
+    ./prune-pkg.sh epics-base-7.0.7-0.git.f9e3717.el8.x86_64
+    ./prune-pkg.sh 'softTCS_mk-0.1-34.git.*'          # glob — QUOTE it
 
-> **Safety — you are the safety net.** There is no automated "is this pinned?"
-> check: pins live across branches, release tags, and even repos OUTSIDE this
-> org, so it can't be known for certain. Review the lists; keep anything a
-> release or external consumer might still need. Nothing is deleted without your
-> explicit `DELETE` confirmation, and grandfathered/clean RPMs are never offered.
+Name **every** tag you want gone in one run — the `prune` workflow deletes them
+all, then rebuilds `:latest` once (~20 min). One tag at a time costs you a
+rebuild each time. It deletes exactly what you name (a name matching nothing
+aborts): type `DELETE`, then `y` to submit.
+
+    ./prune-pkg.sh epics-base-el9 'epics-base-7.0.7-0.git.f9e3717*' rtems-el8
+
+The deleting runs in CI because a local token can't delete packages (that needs
+`delete:packages`). The image shrinks when the rebuild finishes.
+
+> **You are the safety net.** There is no "is this pinned?" check — pins live
+> across branches, release tags, and repos outside this org. Read the list;
+> deletion is permanent and these RPMs are not all rebuildable.
 >
-> **On "newest":** ordering is by **container upload time**. The one-time
-> backfill pushed many old RPMs in a single window, so their upload times don't
-> reflect real build order — a backfilled tag can look "newest." This only
-> affects the pre-existing backfilled set (the old ones you're pruning anyway);
-> builds going forward upload in true order. When in doubt, exclude and keep.
-
-### List RPMs in the served image
-
-    ./list_rpms.sh
+> **Tags marked `[bundle]`** are leftovers from before the per-RPM migration and
+> hold **several** RPMs each. If a bundle also holds an RPM you deleted, the
+> rebuild restores it from there and nothing shrinks.
 
 ## How it works
 
