@@ -50,19 +50,140 @@ tag_exists() {
 
 DOCKER_PUSH_TIMEOUT="${DOCKER_PUSH_TIMEOUT:-600}"
 DOCKER_PUSH_RETRIES="${DOCKER_PUSH_RETRIES:-4}"
+# GNU timeout(1) is `timeout` on Linux (CI runners, gem hosts) but `gtimeout` on
+# macOS with coreutils, and absent on a stock Mac. Resolve once; if neither
+# exists we still push, just unbounded -- an unbounded push is what we had before
+# the timeout was added, and it beats failing every push with 127.
+TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+[ -n "$TIMEOUT_BIN" ] || echo "WARN: no timeout(1)/gtimeout found; docker push will run unbounded (brew install coreutils)" >&2
 docker_push_retry() {
     local ref="$1" attempt=1 rc
     while [ "$attempt" -le "$DOCKER_PUSH_RETRIES" ]; do
-        if timeout "$DOCKER_PUSH_TIMEOUT" docker push "$ref"; then
+        # `|| rc=$?` keeps the push in an OR-list so `set -e` in the calling
+        # script cannot abort mid-retry, and captures the PUSH status -- reading
+        # $? after an `if` compound yields the if's status (0), not the command's.
+        rc=0
+        if [ -n "$TIMEOUT_BIN" ]; then
+            "$TIMEOUT_BIN" "$DOCKER_PUSH_TIMEOUT" docker push "$ref" || rc=$?
+        else
+            docker push "$ref" || rc=$?
+        fi
+        if [ "$rc" -eq 0 ]; then
             return 0
         fi
-        rc=$?
         echo "  push attempt $attempt/$DOCKER_PUSH_RETRIES failed (rc=$rc) for $ref" >&2
         # rc 124 == timeout fired. Either way, back off and retry.
         attempt=$((attempt + 1))
         sleep $((attempt * 5))
     done
     echo "ERROR: docker push failed after $DOCKER_PUSH_RETRIES attempts: $ref" >&2
+    return 1
+}
+
+# Extra `docker buildx` args selecting the builder, set by ensure_buildx_builder.
+# Empty means "whatever builder is active", which is what we want when the caller
+# already provisioned a good one (e.g. via docker/setup-buildx-action).
+BUILDX_BUILDER_ARGS=""
+BUILDX_BUILDER_NAME="${BUILDX_BUILDER_NAME:-rpm-repo-repro}"
+
+# ensure_buildx_builder -- guarantee a builder that can push directly, i.e. the
+# docker-container driver. The default "docker" driver cannot do
+# `--output type=image,push=true`, which is how we get reproducible timestamps.
+#
+# Self-provisioning on purpose (REL-5016): sync_repo.sh is cloned and run by
+# workflows we do not own -- notably gemini-rtsw-ci's publish.yml, which does a
+# bare `git clone` of this repo and calls ./sync_repo.sh with no build setup of
+# its own. Requiring every caller to add a setup-buildx step would silently break
+# the next publish. Creating our own named builder keeps the change self-contained.
+#
+# We never pass --use: the active builder is the developer's, not ours. If one
+# already has the right driver we simply use it; otherwise we target ours by name.
+ensure_buildx_builder() {
+    if ! docker buildx version >/dev/null 2>&1; then
+        echo "ERROR: docker buildx not found (needed for reproducible layer timestamps)." >&2
+        echo "       On a Mac with Homebrew docker the plugin ships in" >&2
+        echo "       \$(brew --prefix)/lib/docker/cli-plugins but is not on the CLI's" >&2
+        echo "       search path; link it once:" >&2
+        echo "         mkdir -p ~/.docker/cli-plugins" >&2
+        echo "         ln -sf \$(brew --prefix)/lib/docker/cli-plugins/docker-buildx ~/.docker/cli-plugins/" >&2
+        return 1
+    fi
+
+    local drv
+    drv=$(docker buildx inspect 2>/dev/null | awk '/^Driver:/{print $2; exit}')
+    if [ "$drv" = "docker-container" ]; then
+        BUILDX_BUILDER_ARGS=""
+        echo "buildx: active builder already uses the docker-container driver."
+        return 0
+    fi
+
+    echo "buildx: active driver is '${drv:-none}', which cannot push directly;"
+    echo "        provisioning builder '$BUILDX_BUILDER_NAME' (docker-container)..."
+    # create fails if it already exists from a previous run -- that is fine, we
+    # only need it to exist. Not --use: leave the caller's active builder alone.
+    docker buildx create --name "$BUILDX_BUILDER_NAME" --driver docker-container >/dev/null 2>&1 || true
+    drv=$(docker buildx inspect "$BUILDX_BUILDER_NAME" 2>/dev/null | awk '/^Driver:/{print $2; exit}')
+    if [ "$drv" != "docker-container" ]; then
+        echo "ERROR: could not provision a docker-container buildx builder." >&2
+        echo "       Create one by hand and re-run:" >&2
+        echo "         docker buildx create --name $BUILDX_BUILDER_NAME --driver docker-container" >&2
+        return 1
+    fi
+    BUILDX_BUILDER_ARGS="--builder $BUILDX_BUILDER_NAME"
+    return 0
+}
+
+# buildx_build_push <image:tag> -- build Dockerfile.rpm-repo and push it, with the
+# same timeout/retry policy as docker_push_retry. Requires $SCRIPT_DIR, and
+# ensure_buildx_builder to have run.
+#
+# Why buildx and not `docker build` + docker_push_retry (REL-5016): only buildx
+# offers rewrite-timestamp, which clamps timestamps in the layers the build
+# creates to $SOURCE_DATE_EPOCH. That is what makes an unchanged bucket produce
+# the same layer digest twice, so consumers pull only what actually changed.
+# Freezing mtimes in the build context is necessary but NOT sufficient: the
+# builder also stamps the COPY destination directories (/usr/share/nginx/html and
+# .../rpm-repo) with the build time, and those entries appear in every one of the
+# 32 bucket layers -- nothing outside the builder can reach them.
+#
+# --provenance/--sbom off: attestations would make the pushed artifact an OCI
+# index rather than a plain manifest, which tag_exists and repo-usage.sh do not
+# expect, and their embedded build times are non-reproducible by definition.
+#
+# buildx builds AND pushes in one step, so the timeout has to cover the build
+# too (4x DOCKER_PUSH_TIMEOUT), and a retry redoes the build. The build is mostly
+# cached, so a retry is cheaper than the multiplier suggests.
+#
+# $BUILDX_BUILDER_ARGS is deliberately unquoted: it is either empty or
+# "--builder <name>", and a builder name never contains whitespace.
+buildx_build_push() {
+    local ref="$1" attempt=1 rc to=$((DOCKER_PUSH_TIMEOUT * 4))
+    : "${SOURCE_DATE_EPOCH:?buildx_build_push: SOURCE_DATE_EPOCH must be set}"
+    while [ "$attempt" -le "$DOCKER_PUSH_RETRIES" ]; do
+        # `|| rc=$?` for the same reason as in docker_push_retry: keep the
+        # command in an OR-list so `set -e` cannot abort mid-retry.
+        rc=0
+        if [ -n "$TIMEOUT_BIN" ]; then
+            "$TIMEOUT_BIN" "$to" docker buildx ${BUILDX_BUILDER_ARGS} build \
+                -f "$SCRIPT_DIR/Dockerfile.rpm-repo" \
+                --output "type=image,name=${ref},push=true,rewrite-timestamp=true" \
+                --provenance=false --sbom=false \
+                "$SCRIPT_DIR" || rc=$?
+        else
+            docker buildx ${BUILDX_BUILDER_ARGS} build \
+                -f "$SCRIPT_DIR/Dockerfile.rpm-repo" \
+                --output "type=image,name=${ref},push=true,rewrite-timestamp=true" \
+                --provenance=false --sbom=false \
+                "$SCRIPT_DIR" || rc=$?
+        fi
+        if [ "$rc" -eq 0 ]; then
+            return 0
+        fi
+        echo "  build+push attempt $attempt/$DOCKER_PUSH_RETRIES failed (rc=$rc) for $ref" >&2
+        attempt=$((attempt + 1))
+        sleep $((attempt * 10))
+    done
+    echo "ERROR: buildx build+push failed after $DOCKER_PUSH_RETRIES attempts: $ref" >&2
     return 1
 }
 

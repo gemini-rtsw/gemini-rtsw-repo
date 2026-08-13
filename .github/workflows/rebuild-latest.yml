@@ -12,6 +12,10 @@ on:
         description: 'Allow the rebuild to shrink (use after a prune that removed tags)'
         required: false
         default: 'false'
+      publish_tag:
+        description: 'Tag to publish (default latest). Set e.g. repro-test to rehearse a packing change without touching :latest.'
+        required: false
+        default: 'latest'
 
 permissions:
   contents: read
@@ -45,6 +49,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # sync_repo.sh builds with `buildx --output type=image,push=true`, which the
+      # default builder cannot do -- this provides a docker-container driver.
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Rebuild and push :latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -52,6 +61,7 @@ jobs:
           # Prune-aware: when dispatched after a prune, allow the image to shrink
           # past the anti-truncation guard.
           PRUNE_REBUILD: ${{ inputs.allow_shrink == 'true' && '1' || '0' }}
+          PUBLISH_TAG: ${{ inputs.publish_tag || 'latest' }}
         run: |
           df -h /
           chmod +x sync_repo.sh

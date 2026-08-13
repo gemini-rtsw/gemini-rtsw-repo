@@ -22,11 +22,22 @@ FROM nginx:alpine
 # Remove default nginx config
 RUN rm /etc/nginx/conf.d/default.conf
 
-# Serve the RPM repo on port 8080 at /rpm-repo/
+# Serve the RPM repo on port 8080 at /rpm-repo/.
+#
+# repodata/ is served no-cache (REL-5016): every file in this image now carries a
+# fixed mtime so that unchanged layers keep their digest, which means nginx
+# derives a constant Last-Modified (and a size-only ETag) for repomd.xml. dnf
+# itself compares repomd.xml content, so direct clients are unaffected -- but an
+# intervening HTTP proxy could otherwise serve stale metadata after a rebuild
+# that left the file the same size. The RPMs themselves need no such header:
+# their filenames carry the NVRA, so changed content means a changed URL.
 RUN echo 'server { \
     listen 8080; \
     root /usr/share/nginx/html; \
     autoindex on; \
+    location /rpm-repo/repodata/ { \
+        add_header Cache-Control "no-cache"; \
+    } \
     location / { \
         try_files $uri $uri/ =404; \
     } \
