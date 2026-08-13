@@ -372,11 +372,19 @@ SUMMARY_FILE=$(mktemp)
 #
 # ONLY_EL kept for forward-compat / manual single-EL rebuilds, but defaults to
 # the combined build.
+#
+# PUBLISH_TAG overrides the published tag for the combined build. It exists so a
+# change to how the image is packed can be exercised end to end -- real tag set,
+# real 8GB context, real createrepo_c -- WITHOUT touching :latest. Publish twice
+# to the same throwaway tag with no RPM changes in between and compare the layer
+# digests; identical means an unchanged bucket is genuinely reproducible.
+# Defaults to "latest", so normal runs are unaffected.
+PUBLISH_TAG="${PUBLISH_TAG:-latest}"
 ONLY_EL="${1:-}"
 case "$ONLY_EL" in
     8)  build_one "latest-el8" ".el8." ;;
     9)  build_one "latest-el9" ".el9." ;;
-    "") build_one "latest" "" ;;
+    "") build_one "$PUBLISH_TAG" "" ;;
     *)  echo "ERROR: arg must be 8, 9, or empty (got '$ONLY_EL')" >&2; exit 1 ;;
 esac
 
