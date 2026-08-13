@@ -28,12 +28,31 @@ set -euo pipefail
 RPM_REPO_IMAGE="ghcr.io/gemini-rtsw/rpm-repo"
 RPM_DIR="./rpms"
 BUILD_DIR="./rpm-repo"
+
+# Fixed timestamp for every file in the built image (REL-5016).
+#
+# A layer's digest is the sha256 of its gzipped tar, and a tar carries mtimes.
+# The bucketing below exists so that adding one RPM only re-pushes one bucket --
+# but that only works if an UNCHANGED bucket serialises to the same bytes. It did
+# not: `cp` (no -p) stamped every RPM with the build time, so all 32 bucket
+# layers got a fresh digest on every rebuild and consumers re-pulled the whole
+# ~8GB image every time. Measured before the fix: 8 of 43 layers shared between
+# consecutive builds, and those 8 were the nginx base.
+#
+# NEVER change this value. Changing it re-digests all 32 bucket layers and forces
+# every consumer into a one-time full re-pull.
+export SOURCE_DATE_EPOCH=1000000000
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/tag-lib.sh"
 
 mkdir -p "$RPM_DIR"
 cleanup() { rm -rf "$BUILD_DIR"; }
 trap cleanup EXIT
+
+# --- 0. Preflight the builder ---------------------------------------------
+# Up front, before the hundreds of tag pulls: an unusable buildx should fail in
+# seconds, not after several GB of downloads (REL-5016).
+ensure_buildx_builder || exit 1
 
 # --- 1. List every rpm-* scratch tag --------------------------------------
 echo "1. Listing rpm-* scratch tags..."
@@ -311,10 +330,20 @@ build_one() {
     # then done) and in single-EL mode (this runner builds only one EL). Only
     # the legacy both-EL-in-one-process path would still need it -- not used now.
     rm -rf "$RPM_DIR"; df -h / 2>/dev/null || true
-    docker build -f "$SCRIPT_DIR/Dockerfile.rpm-repo" \
-        --build-arg NUM_BUCKETS=$NUM_BUCKETS \
-        -t "$RPM_REPO_IMAGE:$tag" "$SCRIPT_DIR"
-    docker_push_retry "$RPM_REPO_IMAGE:$tag"
+
+    # Freeze the context (REL-5016). The `cp` that filled $bdir does not take -p,
+    # so every RPM currently carries the build time as its mtime; without this
+    # every bucket layer is a brand-new blob on every rebuild.
+    #
+    # `touch -d @<epoch>` is GNU-only, and `-t` reads LOCAL time on both GNU and
+    # BSD -- so derive the stamp once and force TZ=UTC, or the frozen mtime would
+    # differ between a CI runner and a developer's Mac and defeat the whole point.
+    local stamp
+    stamp=$(TZ=UTC date -u -d "@$SOURCE_DATE_EPOCH" +%Y%m%d%H%M.%S 2>/dev/null \
+         || TZ=UTC date -u -r "$SOURCE_DATE_EPOCH" +%Y%m%d%H%M.%S)
+    find "$BUILD_DIR" -exec env TZ=UTC touch -h -t "$stamp" {} +
+
+    buildx_build_push "$RPM_REPO_IMAGE:$tag"
     rm -rf "$BUILD_DIR"
 
     # Record the new count (after a successful push) for next run's guard.
@@ -322,8 +351,9 @@ build_one() {
     # Stash the published count for the final summary.
     echo "$tag $bucketed" >> "$SUMMARY_FILE"
 
-    # Reclaim disk before the next per-EL build (the built image is pushed; the
-    # RPMs persist as files in $RPM_DIR, so this is lossless).
+    # Reclaim disk before the next per-EL build. buildx pushes straight to the
+    # registry, so the multi-GB image never enters the local daemon and the rmi
+    # is now a no-op -- kept as a cheap belt-and-braces for older local state.
     docker rmi -f "$RPM_REPO_IMAGE:$tag" 2>/dev/null || true
     docker image prune -af 2>/dev/null || true
     docker builder prune -f 2>/dev/null || true
