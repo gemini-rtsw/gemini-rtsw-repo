@@ -50,13 +50,27 @@ tag_exists() {
 
 DOCKER_PUSH_TIMEOUT="${DOCKER_PUSH_TIMEOUT:-600}"
 DOCKER_PUSH_RETRIES="${DOCKER_PUSH_RETRIES:-4}"
+# GNU timeout(1) is `timeout` on Linux (CI runners, gem hosts) but `gtimeout` on
+# macOS with coreutils, and absent on a stock Mac. Resolve once; if neither
+# exists we still push, just unbounded -- an unbounded push is what we had before
+# the timeout was added, and it beats failing every push with 127.
+TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+[ -n "$TIMEOUT_BIN" ] || echo "WARN: no timeout(1)/gtimeout found; docker push will run unbounded (brew install coreutils)" >&2
 docker_push_retry() {
     local ref="$1" attempt=1 rc
     while [ "$attempt" -le "$DOCKER_PUSH_RETRIES" ]; do
-        if timeout "$DOCKER_PUSH_TIMEOUT" docker push "$ref"; then
+        # `|| rc=$?` keeps the push in an OR-list so `set -e` in the calling
+        # script cannot abort mid-retry, and captures the PUSH status -- reading
+        # $? after an `if` compound yields the if's status (0), not the command's.
+        rc=0
+        if [ -n "$TIMEOUT_BIN" ]; then
+            "$TIMEOUT_BIN" "$DOCKER_PUSH_TIMEOUT" docker push "$ref" || rc=$?
+        else
+            docker push "$ref" || rc=$?
+        fi
+        if [ "$rc" -eq 0 ]; then
             return 0
         fi
-        rc=$?
         echo "  push attempt $attempt/$DOCKER_PUSH_RETRIES failed (rc=$rc) for $ref" >&2
         # rc 124 == timeout fired. Either way, back off and retry.
         attempt=$((attempt + 1))
