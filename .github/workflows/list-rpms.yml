@@ -1,0 +1,77 @@
+name: list-rpms
+
+# List the rpm-* scratch tags in rpm-repo, one line per RPM, with sizes. Same
+# output as ./list_rpms.sh, but rendered into the run summary so you can pick
+# what to prune from the GitHub UI without cloning the repo.
+#
+# Trigger: Actions -> list-rpms -> Run workflow. Read the summary, then feed the
+# rpm-* names you want gone into the `prune` workflow's `tags` input.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pattern:
+        description: 'Only list RPMs whose name contains this (blank = all)'
+        required: false
+        default: ''
+      sizes:
+        description: 'Fetch the size column (slower -- one manifest read per RPM)'
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  list:
+    name: rpm-repo RPM listing
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: List RPMs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          PATTERN: ${{ inputs.pattern }}
+          NO_SIZE: ${{ inputs.sizes && '0' || '1' }}
+        run: |
+          chmod +x list_rpms.sh
+          args=()
+          if [ "$NO_SIZE" = "1" ]; then args+=(--no-size); fi
+          if [ -n "$PATTERN" ]; then args+=("$PATTERN"); fi
+          # Keep going on "no match" (exit 1) so the summary still explains it.
+          set +e
+          ./list_rpms.sh "${args[@]}" 2>&1 | tee listing.txt
+          echo "${PIPESTATUS[0]}" > rc.txt
+          set -e
+
+      - name: Write run summary
+        if: always()
+        env:
+          PATTERN: ${{ inputs.pattern }}
+        run: |
+          {
+            echo "## RPMs in \`ghcr.io/gemini-rtsw/rpm-repo\`"
+            echo
+            if [ -n "$PATTERN" ]; then printf 'Filter: `%s`\n\n' "$PATTERN"; fi
+            echo '```'
+            cat listing.txt 2>/dev/null || echo "(no output -- see the job log)"
+            echo '```'
+            echo
+            echo "### To prune"
+            echo
+            echo "Run the **prune** workflow and paste the tags you want deleted into"
+            echo "\`tags\`, space-separated and **\`rpm-\` prefixed** (the names above have"
+            echo "that prefix stripped). Example: \`rpm-epics-base-7.0.7-1.el9.x86_64\`."
+            echo
+            echo "Tags marked \`[bundle: holds several RPMs]\` hold more than one RPM --"
+            echo "deleting one will not shrink the image by just that RPM."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Propagate the script's exit code
+        if: always()
+        run: exit "$(cat rc.txt 2>/dev/null || echo 1)"
