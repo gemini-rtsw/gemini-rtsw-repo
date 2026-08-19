@@ -272,8 +272,13 @@ ghcr_list_rpm_tags() {
 # version id via the GitHub REST API and DELETE that version. Uses curl + the
 # resolved GITHUB_TOKEN (NO `gh` -- it may not be installed). The token needs
 # delete:packages scope. Paginates all version pages. Returns nonzero on fail.
+# <tag> may omit the rpm- prefix; it is added if missing.
 ghcr_delete_tag() {
     local tag="$1" vid
+    # Accept a name in EITHER form: the real GHCR tag (rpm-<NVRA>) or the name as
+    # list_rpms.sh prints it (prefix stripped). Pasting the listing straight into
+    # the prune workflow used to fail every tag with "no version id found".
+    case "$tag" in rpm-*) ;; *) tag="rpm-${tag}" ;; esac
     ghcr_resolve_creds || return 1
     vid=$(python3 - "$GITHUB_TOKEN" "$tag" <<'PY' 2>/dev/null
 import json,urllib.request,sys

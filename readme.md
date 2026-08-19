@@ -62,7 +62,7 @@ packages needs a scope a local token usually lacks.
 |----------|--------------|--------|
 | `list-rpms` | **List the scratch tags**, one line per RPM with size, rendered into the run summary. Read-only — nothing is pulled or changed. Use it to decide what to prune without cloning. | `pattern` — only list names containing this; space-separate several to match **any** of them (`epics-base rtems`); blank = all. `sizes` — fetch the size column (default on; uncheck for a much faster listing). |
 | `repo-usage` | **Space report:** per-package tag count + total size, biggest first. The coarse view — which *package* is heavy, before `list-rpms` shows individual versions. Read-only. | none |
-| `prune` | **Delete the named scratch tags**, then rebuild `:latest` (~20 min). Usually dispatched by `prune-pkg.sh`, but fine to run by hand. | `tags` — space-separated tags to DELETE, **`rpm-` prefixed**. `allow_shrink` — let the rebuild shrink the image past the anti-truncation guard (default `true`; that's what you want after a real prune). |
+| `prune` | **Delete the named scratch tags**, then rebuild `:latest` (~20 min). Usually dispatched by `prune-pkg.sh`, but fine to run by hand. | `tags` — space-separated tags to DELETE, exactly as `list-rpms` prints them (the `rpm-` prefix is optional). An unknown name aborts the run before anything is deleted. `allow_shrink` — let the rebuild shrink the image past the anti-truncation guard (default `true`; that's what you want after a real prune). |
 | `rebuild-latest` | **Rebuild + push `:latest`** purely from the scratch tags. This is the heal / force-rebuild button: if an RPM has a tag but is missing from the served image, run this. | `allow_shrink` — permit a smaller image (default `false`; set `true` only after tags were removed). `publish_tag` — publish under a different tag (default `latest`) to rehearse a packing change without touching `:latest`. |
 
 Each workflow's own header comment carries the same explanation next to the code.
@@ -74,10 +74,13 @@ No clone required:
 1. **Actions → repo-usage → Run workflow** — see which packages are heavy.
 2. **Actions → list-rpms → Run workflow**, optionally with a `pattern` — the
    summary lists every matching RPM with its size.
-3. **Actions → prune → Run workflow** — paste the tags into `tags`, space
-   separated, each with the **`rpm-` prefix** that step 2 strips off. Leave
-   `allow_shrink` at `true`. Name everything in one run: each run costs one
-   `:latest` rebuild.
+3. **Actions → prune → Run workflow** — paste the names from step 2 into
+   `tags`, space separated (the `rpm-` prefix is added for you if you leave it
+   off). Leave `allow_shrink` at `true`. Name everything in one run: each run
+   costs one `:latest` rebuild.
+
+   A name that matches no tag aborts the run *before* any delete or rebuild, so
+   a typo costs you nothing but a re-run.
 
 The same warnings as the local path apply — see [Reclaim space](#reclaim-space-usage-report--prune)
 below for the `[bundle]` caveat and the "you are the safety net" note.

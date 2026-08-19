@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tags:
-        description: 'Space-separated rpm-* tags to DELETE'
+        description: 'Space-separated tags to DELETE. The rpm- prefix is optional -- paste straight from the list-rpms output.'
         required: true
       allow_shrink:
         description: 'Allow the post-delete rebuild to shrink the image'
@@ -52,7 +52,10 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Delete the chosen tags
+      # Check every requested tag EXISTS before deleting anything. Without this a
+      # typo (or a name pasted without the rpm- prefix) merely warned per tag and
+      # still paid for the ~20 min rebuild below. Abort now instead.
+      - name: Resolve and check the requested tags
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
@@ -60,11 +63,41 @@ jobs:
         run: |
           chmod +x tag-lib.sh
           . ./tag-lib.sh
-          fail=0
+          ghcr_list_rpm_tags > all-tags.txt
+          echo "repo holds $(grep -c . all-tags.txt) rpm-* tag(s)"
+          : > to-delete.txt
+          missing=""
           for t in $TAGS; do
             [ -n "$t" ] || continue
-            if ghcr_delete_tag "$t"; then echo "  deleted $t"; else echo "  FAILED $t"; fail=1; fi
+            case "$t" in rpm-*) full="$t" ;; *) full="rpm-$t" ;; esac
+            if grep -qxF "$full" all-tags.txt; then
+              echo "$full" >> to-delete.txt
+            else
+              missing="${missing} ${t}"
+            fi
           done
+          if [ -n "$missing" ]; then
+            echo "::error::no such tag(s):${missing}"
+            echo "Nothing was deleted. Names must match the list-rpms output" >&2
+            echo "(with or without the rpm- prefix); check for typos." >&2
+            exit 1
+          fi
+          sort -u -o to-delete.txt to-delete.txt
+          echo "will delete $(grep -c . to-delete.txt) tag(s):"
+          sed 's/^/  /' to-delete.txt
+
+      - name: Delete the chosen tags
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          chmod +x tag-lib.sh
+          . ./tag-lib.sh
+          fail=0
+          while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            if ghcr_delete_tag "$t"; then echo "  deleted $t"; else echo "  FAILED $t"; fail=1; fi
+          done < to-delete.txt
           [ "$fail" -eq 0 ] || echo "::warning::some tags failed to delete (see above)"
 
       - name: Rebuild :latest (prune-aware)
