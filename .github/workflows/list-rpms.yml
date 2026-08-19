@@ -65,12 +65,17 @@ jobs:
             echo
             echo "### To prune"
             echo
-            echo "Run the **prune** workflow and paste the tags you want deleted into"
-            echo "\`tags\`, space-separated and **\`rpm-\` prefixed** (the names above have"
-            echo "that prefix stripped). Example: \`rpm-epics-base-7.0.7-1.el9.x86_64\`."
+            echo "Run the **prune** workflow and paste the names above into \`tags\`,"
+            echo "space-separated -- copy them exactly as shown; the \`rpm-\` prefix is"
+            echo "added for you. A name matching no tag aborts the run before anything"
+            echo "is deleted, so a typo is free."
+            echo
+            echo "Name **everything** you want gone in one run: each run rebuilds"
+            echo "\`:latest\` once (~20 min), so one tag at a time costs a rebuild each."
             echo
             echo "Tags marked \`[bundle: holds several RPMs]\` hold more than one RPM --"
-            echo "deleting one will not shrink the image by just that RPM."
+            echo "deleting one will not shrink the image by just that RPM. Deletion is"
+            echo "permanent and not every RPM here is rebuildable: read the list first."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Propagate the script's exit code
