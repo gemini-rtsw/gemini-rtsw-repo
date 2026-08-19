@@ -2,9 +2,10 @@
 
 # list_rpms.sh -- list the RPM scratch tags, one line per RPM.
 #
-#   ./list_rpms.sh                 # everything
-#   ./list_rpms.sh epics-base      # only names containing "epics-base"
-#   ./list_rpms.sh --no-size foo   # skip the size column (much faster)
+#   ./list_rpms.sh                      # everything
+#   ./list_rpms.sh epics-base           # only names containing "epics-base"
+#   ./list_rpms.sh epics-base rtems     # names matching EITHER (patterns OR'd)
+#   ./list_rpms.sh --no-size foo        # skip the size column (much faster)
 #
 # The tag name IS the RPM filename, so the full NVR and git hash are right
 # there. Sizes come from each tag's manifest -- nothing is pulled.
@@ -16,15 +17,27 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 SIZES=1
 if [ "${1:-}" = "--no-size" ]; then SIZES=0; shift; fi
-PATTERN="${1:-}"
+
+# Every remaining arg is a pattern; a tag matching ANY of them is listed. Empty
+# args are dropped so a quoted "a b" and two bare args behave the same.
+PATTERNS=()
+for p in "$@"; do
+    for w in $p; do
+        if [ -n "$w" ]; then PATTERNS+=("$w"); fi
+    done
+done
 
 ghcr_resolve_creds || exit 1
 
 tags=$(ghcr_list_rpm_tags | sed 's/^rpm-//' | sort)
-if [ -n "$PATTERN" ]; then
-    tags=$(printf '%s\n' "$tags" | grep -i -- "$PATTERN" || true)
+if [ "${#PATTERNS[@]}" -gt 0 ]; then
+    grep_args=()
+    for p in "${PATTERNS[@]}"; do grep_args+=(-e "$p"); done
+    tags=$(printf '%s\n' "$tags" | grep -i "${grep_args[@]}" || true)
 fi
-if [ -z "$tags" ]; then echo "No RPMs match '${PATTERN}'." >&2; exit 1; fi
+if [ -z "$tags" ]; then
+    echo "No RPMs match '${PATTERNS[*]-}'." >&2; exit 1
+fi
 
 # A tag not ending in an arch is a leftover pre-migration tag holding SEVERAL
 # RPMs. Deleting an RPM that one of these also holds will not shrink the repo.

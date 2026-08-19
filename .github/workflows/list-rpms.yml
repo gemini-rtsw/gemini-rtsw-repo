@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       pattern:
-        description: 'Only list RPMs whose name contains this (blank = all)'
+        description: 'Only list RPMs whose name contains this. Space-separate several to match ANY of them (e.g. "epics-base rtems"). Blank = all.'
         required: false
         default: ''
       sizes:
@@ -42,7 +42,8 @@ jobs:
           chmod +x list_rpms.sh
           args=()
           if [ "$NO_SIZE" = "1" ]; then args+=(--no-size); fi
-          if [ -n "$PATTERN" ]; then args+=("$PATTERN"); fi
+          # Space-separated: each word is its own pattern, OR'd by the script.
+          if [ -n "$PATTERN" ]; then read -ra pats <<< "$PATTERN"; args+=("${pats[@]}"); fi
           # Keep going on "no match" (exit 1) so the summary still explains it.
           set +e
           ./list_rpms.sh "${args[@]}" 2>&1 | tee listing.txt

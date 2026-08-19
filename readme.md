@@ -49,20 +49,40 @@ automatically — no setup.
 | `prune-pkg.sh` | **Delete scratch tags by name** (globs ok). Shows the list, you type `DELETE` then `y`, and it dispatches the CI `prune` workflow. Name everything in one run — each run costs one `:latest` rebuild. |
 | `backfill-tags.sh` | **One-time migration.** Push every RPM in the served image(s) — including grandfathered ones — as a per-NVRA scratch tag, so the tags become the complete source of truth. Already run. |
 | `tag-lib.sh` | Shared helpers: credential resolution, tag listing, push-retry, tag delete. Sourced by the others. |
-| `list_rpms.sh` | **List the scratch tags**, one line per RPM, with size. Optional name filter. Nothing is pulled. |
+| `list_rpms.sh` | **List the scratch tags**, one line per RPM, with size. Optional name filters (several, space separated, match ANY). Nothing is pulled. Same output as the `list-rpms` workflow. |
 | `download_from_gitlab.sh` | One-time: pull RPMs out of the old GitLab registry. Historical. |
 
 ## Workflows (`.github/workflows/`)
 
-Run from the GitHub UI (**Actions → … → Run workflow**). They run on a runner
-with the ambient `GITHUB_TOKEN`, so no local token or bandwidth is needed.
+Run from the GitHub UI (**Actions → *workflow* → Run workflow**). Each runs on a
+runner with the ambient `GITHUB_TOKEN`, so **no local clone, token, or bandwidth
+is needed** — which matters because the served image is multi-GB and deleting
+packages needs a scope a local token usually lacks.
 
-| Workflow | What it does |
-|----------|--------------|
-| `rebuild-latest` | Rebuild + push `:latest` from all scratch tags (heal / force-rebuild). Optional `allow_shrink` input for prune-aware rebuilds. |
-| `prune` | Delete a given set of tags. Rebuilds `:latest` only if the `rebuild` input is `true`. Dispatched by `prune-pkg.sh` (or run manually, pasting the tag list). |
-| `backfill-tags` | One-time backfill (see above). |
-| `repo-usage` | Print the space report on a runner. |
+| Workflow | What it does | Inputs |
+|----------|--------------|--------|
+| `list-rpms` | **List the scratch tags**, one line per RPM with size, rendered into the run summary. Read-only — nothing is pulled or changed. Use it to decide what to prune without cloning. | `pattern` — only list names containing this; space-separate several to match **any** of them (`epics-base rtems`); blank = all. `sizes` — fetch the size column (default on; uncheck for a much faster listing). |
+| `repo-usage` | **Space report:** per-package tag count + total size, biggest first. The coarse view — which *package* is heavy, before `list-rpms` shows individual versions. Read-only. | none |
+| `prune` | **Delete the named scratch tags**, then rebuild `:latest` (~20 min). Usually dispatched by `prune-pkg.sh`, but fine to run by hand. | `tags` — space-separated tags to DELETE, **`rpm-` prefixed**. `allow_shrink` — let the rebuild shrink the image past the anti-truncation guard (default `true`; that's what you want after a real prune). |
+| `rebuild-latest` | **Rebuild + push `:latest`** purely from the scratch tags. This is the heal / force-rebuild button: if an RPM has a tag but is missing from the served image, run this. | `allow_shrink` — permit a smaller image (default `false`; set `true` only after tags were removed). `publish_tag` — publish under a different tag (default `latest`) to rehearse a packing change without touching `:latest`. |
+| `backfill-tags` | **One-time migration**, already run: reads every RPM out of the old `:latest-el8` / `:latest-el9` images (grandfathered ones included) and pushes each as its own scratch tag. Idempotent, but there is no reason to run it again. | none |
+
+Each workflow's own header comment carries the same explanation next to the code.
+
+### Prune entirely from the browser
+
+No clone required:
+
+1. **Actions → repo-usage → Run workflow** — see which packages are heavy.
+2. **Actions → list-rpms → Run workflow**, optionally with a `pattern` — the
+   summary lists every matching RPM with its size.
+3. **Actions → prune → Run workflow** — paste the tags into `tags`, space
+   separated, each with the **`rpm-` prefix** that step 2 strips off. Leave
+   `allow_shrink` at `true`. Name everything in one run: each run costs one
+   `:latest` rebuild.
+
+The same warnings as the local path apply — see [Reclaim space](#reclaim-space-usage-report--prune)
+below for the `[bundle]` caveat and the "you are the safety net" note.
 
 ## Common tasks
 
@@ -91,15 +111,19 @@ your machine can handle the image.)
 ### Reclaim space: usage report + prune
 
 The scratch tags accumulate every build forever, so the served image grows and
-eventually strains runner disk.
+eventually strains runner disk. Below is the local flow; the same thing is
+doable entirely from the browser — see
+[Prune entirely from the browser](#prune-entirely-from-the-browser).
 
 **1. See what's big:**
 
     ./repo-usage.sh
 
-**2. List every version, one line each, with its size:**
+**2. List every version, one line each, with its size** (several names OK — a
+tag matching any of them is listed):
 
     ./list_rpms.sh epics-base
+    ./list_rpms.sh epics-base rtems
 
     epics-base-7.0.7-0.git.5fb1f41.el8.x86_64      528.0MB
     epics-base-7.0.7-0.git.f9e3717.el8.x86_64      528.0MB
@@ -183,6 +207,8 @@ push/pull instead of moving one monolithic layer.
 - For **pruning**, the dispatching token also needs `workflow` scope (to fire
   the `prune` workflow); the actual delete + rebuild use the runner's
   `GITHUB_TOKEN`.
+- None of the above is needed if you work from the **Actions** tab — the
+  workflows carry their own credentials.
 
 ## GitHub package access
 
