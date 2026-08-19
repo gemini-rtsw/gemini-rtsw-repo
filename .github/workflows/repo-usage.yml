@@ -4,7 +4,8 @@ name: repo-usage
 # so you can spot heavy packages to prune. Runs on a runner -- no local token
 # or bandwidth needed.
 #
-# Trigger: Actions -> repo-usage -> Run workflow. Read the table in the log.
+# Trigger: Actions -> repo-usage -> Run workflow. The table is rendered into the
+# run summary (and is in the job log too).
 
 on:
   workflow_dispatch:
@@ -27,4 +28,33 @@ jobs:
           GITHUB_ACTOR: ${{ github.actor }}
         run: |
           chmod +x repo-usage.sh
-          ./repo-usage.sh
+          # Keep going on failure so the summary still shows whatever came out.
+          set +e
+          ./repo-usage.sh 2>&1 | tee usage.txt
+          echo "${PIPESTATUS[0]}" > rc.txt
+          set -e
+
+      - name: Write run summary
+        if: always()
+        run: |
+          {
+            echo "## rpm-repo usage by package"
+            echo
+            echo '```'
+            cat usage.txt 2>/dev/null || echo "(no output -- see the job log)"
+            echo '```'
+            echo
+            echo "### Next steps"
+            echo
+            echo "This is the coarse view -- which **package** is heavy. To see the"
+            echo "individual versions behind a big number, run the **list-rpms**"
+            echo "workflow with that package name as \`pattern\`, then paste the names"
+            echo "you want gone into the **prune** workflow's \`tags\`."
+            echo
+            echo "A package's total counts every version ever built, so the win from"
+            echo "pruning is the sum of the old versions -- not the whole row."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Propagate the script exit code
+        if: always()
+        run: exit "$(cat rc.txt 2>/dev/null || echo 1)"
