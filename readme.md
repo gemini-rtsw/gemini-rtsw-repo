@@ -47,7 +47,6 @@ automatically — no setup.
 | `sync_repo.sh` | **Publish `:latest`.** Rebuild the served image **purely from the `rpm-*` scratch tags**. Single writer; safe to run standalone to **heal**. |
 | `repo-usage.sh` | **Space report.** Per-package tag count + total size, biggest first — find what to prune. |
 | `prune-pkg.sh` | **Delete scratch tags by name** (globs ok). Shows the list, you type `DELETE` then `y`, and it dispatches the CI `prune` workflow. Name everything in one run — each run costs one `:latest` rebuild. |
-| `backfill-tags.sh` | **One-time migration.** Push every RPM in the served image(s) — including grandfathered ones — as a per-NVRA scratch tag, so the tags become the complete source of truth. Already run. |
 | `tag-lib.sh` | Shared helpers: credential resolution, tag listing, push-retry, tag delete. Sourced by the others. |
 | `list_rpms.sh` | **List the scratch tags**, one line per RPM, with size. Optional name filters (several, space separated, match ANY). Nothing is pulled. Same output as the `list-rpms` workflow. |
 | `download_from_gitlab.sh` | One-time: pull RPMs out of the old GitLab registry. Historical. |
@@ -65,7 +64,6 @@ packages needs a scope a local token usually lacks.
 | `repo-usage` | **Space report:** per-package tag count + total size, biggest first. The coarse view — which *package* is heavy, before `list-rpms` shows individual versions. Read-only. | none |
 | `prune` | **Delete the named scratch tags**, then rebuild `:latest` (~20 min). Usually dispatched by `prune-pkg.sh`, but fine to run by hand. | `tags` — space-separated tags to DELETE, **`rpm-` prefixed**. `allow_shrink` — let the rebuild shrink the image past the anti-truncation guard (default `true`; that's what you want after a real prune). |
 | `rebuild-latest` | **Rebuild + push `:latest`** purely from the scratch tags. This is the heal / force-rebuild button: if an RPM has a tag but is missing from the served image, run this. | `allow_shrink` — permit a smaller image (default `false`; set `true` only after tags were removed). `publish_tag` — publish under a different tag (default `latest`) to rehearse a packing change without touching `:latest`. |
-| `backfill-tags` | **One-time migration**, already run: reads every RPM out of the old `:latest-el8` / `:latest-el9` images (grandfathered ones included) and pushes each as its own scratch tag. Idempotent, but there is no reason to run it again. | none |
 
 Each workflow's own header comment carries the same explanation next to the code.
 

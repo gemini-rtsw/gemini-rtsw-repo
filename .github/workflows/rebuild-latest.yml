@@ -1,7 +1,7 @@
 name: rebuild-latest
 
 # Manually rebuild the combined yum image (rpm-repo:latest) from all rpm-*
-# scratch tags. Use this to HEAL the image, or after backfill.
+# scratch tags. Use this to HEAL the image.
 #
 # Trigger from the GitHub UI: Actions -> rebuild-latest -> Run workflow.
 
