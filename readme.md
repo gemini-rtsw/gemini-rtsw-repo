@@ -91,12 +91,27 @@ below for the `[bundle]` caveat and the "you are the safety net" note.
 
     ./upload-rpm.sh path/to/foo.rpm [path/to/foo-devel.rpm ...]
 
-Pushes each RPM's scratch tag, then rebuilds `:latest`. For one upload this is
-fine. To stage several and publish once:
+Pushes each RPM's scratch tag, then rebuilds `:latest`.
+
+**Prefer `--tag-only` plus the Action.** Without it, `upload-rpm.sh` runs
+`sync_repo.sh` locally, which pulls every `rpm-*` tag and the old `:latest` --
+several GB, and painful on a slow or metered connection. `--tag-only` pushes
+just your package (a `FROM scratch` image, so ~the size of the RPM) and skips
+the rebuild entirely:
 
     ./upload-rpm.sh --tag-only a.rpm a-devel.rpm
     ./upload-rpm.sh --tag-only b.rpm
-    ./sync_repo.sh                 # rebuild :latest once
+
+then **Actions → rebuild-latest → Run workflow**, which does the multi-GB
+merge on a runner instead of your machine. Leave `allow_shrink` at `false`
+when you are only adding packages.
+
+Nothing is at risk while you wait: the tags are the source of truth, so an
+uploaded package sits safely in its own tag and is picked up by the next
+rebuild, whoever triggers it.
+
+`./sync_repo.sh` locally does the same job, if your machine and connection can
+take the image.
 
 (Normally CI does this: build legs push tags with `--tag-only`, and a final
 publish job runs `sync_repo.sh` once.)
@@ -116,8 +131,20 @@ image. Copy the file out instead:
 prints. `/x` is a placeholder command — `docker create` refuses an image with
 no `CMD`, and nothing ever runs it.
 
-Get the exact tag name from `./list_rpms.sh <pattern>`; the tag is
-`rpm-` followed by the RPM filename without `.rpm`.
+**Finding the tag name.** `./list_rpms.sh <pattern>` prints the NVRA; the tag
+is that with an `rpm-` prefix. So:
+
+    $ ./list_rpms.sh vxworks
+    gem-vxworks-tornado22-2.2-1.el9.noarch          1.7MB
+
+gives the tag `rpm-gem-vxworks-tornado22-2.2-1.el9.noarch`, and the whole
+sequence is:
+
+    NAME=gem-vxworks-tornado22-2.2-1.el9.noarch      # copied from list_rpms.sh
+    cid=$(docker create ghcr.io/gemini-rtsw/rpm-repo:rpm-$NAME /x)
+    docker cp "$cid:/." .
+    docker rm "$cid"
+    rpm -qip $NAME.rpm                               # confirm what you got
 
 Most of the time you do not need this: once the package is in `:latest` it is
 reachable with plain `dnf` (see [Using the repository](#using-the-repository)).
