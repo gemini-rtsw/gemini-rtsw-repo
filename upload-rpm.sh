@@ -66,7 +66,17 @@ for f in "$@"; do
 FROM scratch
 COPY *.rpm /
 EOF
-    docker build -t "${RPM_REPO_IMAGE}:${TAG}" "$STAGE"
+    # --platform is pinned, not inherited from the build host. These wrappers
+    # hold an RPM and nothing executable, so they have no real architecture --
+    # but docker stamps one anyway, and an upload from an arm64 laptop then
+    # produces a tag the amd64 sync job cannot read:
+    #
+    #   no matching manifest for linux/amd64 in the manifest list entries
+    #
+    # That surfaces later, in someone else's rebuild-latest run, rather than
+    # here where it was caused -- and retrying cannot fix a platform mismatch,
+    # so it burns all three attempts and fails the job.
+    docker build --platform linux/amd64 -t "${RPM_REPO_IMAGE}:${TAG}" "$STAGE"
     docker_push_retry "${RPM_REPO_IMAGE}:${TAG}"
     rm -rf "$STAGE"
     echo "   pushed ${RPM_REPO_IMAGE}:${TAG}"
