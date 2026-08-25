@@ -116,8 +116,20 @@ image. Copy the file out instead:
 prints. `/x` is a placeholder command — `docker create` refuses an image with
 no `CMD`, and nothing ever runs it.
 
-Get the exact tag name from `./list_rpms.sh <pattern>`; the tag is
-`rpm-` followed by the RPM filename without `.rpm`.
+**Finding the tag name.** `./list_rpms.sh <pattern>` prints the NVRA; the tag
+is that with an `rpm-` prefix. So:
+
+    $ ./list_rpms.sh vxworks
+    gem-vxworks-tornado22-2.2-1.el9.noarch          1.7MB
+
+gives the tag `rpm-gem-vxworks-tornado22-2.2-1.el9.noarch`, and the whole
+sequence is:
+
+    NAME=gem-vxworks-tornado22-2.2-1.el9.noarch      # copied from list_rpms.sh
+    cid=$(docker create ghcr.io/gemini-rtsw/rpm-repo:rpm-$NAME /x)
+    docker cp "$cid:/." .
+    docker rm "$cid"
+    rpm -qip $NAME.rpm                               # confirm what you got
 
 Most of the time you do not need this: once the package is in `:latest` it is
 reachable with plain `dnf` (see [Using the repository](#using-the-repository)).
