@@ -101,6 +101,29 @@ fine. To stage several and publish once:
 (Normally CI does this: build legs push tags with `--tag-only`, and a final
 publish job runs `sync_repo.sh` once.)
 
+### Get one RPM out of a scratch tag
+
+Each RPM is stored as its own `FROM scratch` image holding just the file. There
+is no shell in it, so `docker run ... bash` fails with
+`exec: "bash": executable file not found` — that is expected, not a broken
+image. Copy the file out instead:
+
+    cid=$(docker create ghcr.io/gemini-rtsw/rpm-repo:rpm-<NVRA> /x)
+    docker cp "$cid:/." .
+    docker rm "$cid"
+
+`cid` is just a shell variable holding the container ID that `docker create`
+prints. `/x` is a placeholder command — `docker create` refuses an image with
+no `CMD`, and nothing ever runs it.
+
+Get the exact tag name from `./list_rpms.sh <pattern>`; the tag is
+`rpm-` followed by the RPM filename without `.rpm`.
+
+Most of the time you do not need this: once the package is in `:latest` it is
+reachable with plain `dnf` (see [Using the repository](#using-the-repository)).
+Pulling a tag directly is for checking what a specific upload actually
+contains.
+
 ### Heal / force-rebuild `:latest`
 
 If an RPM is in a scratch tag but missing from `:latest`, just republish — no
