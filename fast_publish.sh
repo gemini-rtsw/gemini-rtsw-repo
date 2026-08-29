@@ -309,6 +309,14 @@ docker exec "$CID" sh -c "test -s $REPO_PATH/repodata/repomd.xml" \
 echo "   verified: $ADD added, none lost"
 
 # --- 7. Commit and push ----------------------------------------------------
+# Stop the container first. Committing a RUNNING nginx captures /run/nginx.pid
+# into the layer -- harmless (it is never served, and the next publish replaces
+# it) but it is runtime noise in an artifact that should hold only the repo.
+# StopSignal is SIGQUIT, so nginx shuts down gracefully and unlinks the pidfile
+# itself. Nothing below needs `docker exec` any more; `docker cp` and `commit`
+# both work on a stopped container.
+docker stop "$CID" >/dev/null 2>&1 || true
+
 # `docker commit` carries the source image's config forward (Cmd, Entrypoint,
 # ExposedPorts, WorkingDir, StopSignal), so nginx still starts the same way.
 echo "7. Committing and pushing ${RPM_REPO_IMAGE}:${PUBLISH_TAG}..."
