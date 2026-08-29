@@ -44,6 +44,7 @@ automatically — no setup.
 | Script | Purpose |
 |--------|---------|
 | `upload-rpm.sh` | **Register RPM(s).** Push each RPM as its own `rpm-<NVRA>` scratch tag. No flag → also publishes (calls `sync_repo.sh`). `--tag-only` → push tags, skip publish (CI build legs use this). |
+| `fast_publish.sh` | **Publish `:latest` incrementally.** Pull the current image, add only the RPMs it lacks, merge the metadata, `docker commit`, push. Falls back to `sync_repo.sh` on any doubt. Gated by `FAST_PUBLISH=1`. |
 | `sync_repo.sh` | **Publish `:latest`.** Rebuild the served image **purely from the `rpm-*` scratch tags**. Single writer; safe to run standalone to **heal**. |
 | `repo-usage.sh` | **Space report.** Per-package tag count + total size, biggest first — find what to prune. |
 | `prune-pkg.sh` | **Delete scratch tags by name** (globs ok). Shows the list, you type `DELETE` then `y`, and it dispatches the CI `prune` workflow. Name everything in one run — each run costs one `:latest` rebuild. |
@@ -84,6 +85,48 @@ No clone required:
 
 The same warnings as the local path apply — see [Reclaim space](#reclaim-space-usage-report--prune)
 below for the `[bundle]` caveat and the "you are the safety net" note.
+
+## Compaction
+
+`fast_publish.sh` adds **one layer per publish**. overlay2 stops working somewhere
+around 128 layers, so at `MAX_LAYERS` (default 100) the script refuses the fast
+path and falls back to a full `sync_repo.sh` rebuild, which flattens the image
+back to ~43 layers. Starting from 43, that is roughly every 57 publishes.
+
+Compaction is also **the only thing that reclaims space**. An incremental publish
+can hide a file (an overlay whiteout) but never removes its bytes from the base
+layers -- so RPMs whose tags were pruned keep occupying the image until a full
+rebuild happens.
+
+### How you will find out
+
+The publish job prints a banner and raises a GitHub Actions **warning
+annotation** on the run page ("rpm-repo compaction needed"), plus a summary
+panel with these instructions. You do not have to be watching the logs.
+
+### If the rebuild fails
+
+The fallback is the pre-REL-5019 path: it needs **~40GB** of disk, and a 72GB
+GitHub runner has ~43GB free after cleanup. Runner size is a coin flip, so the
+job may die with:
+
+    ERROR: ... /var/lib/buildkit/.../ingest/...: no space left on device
+
+Run it by hand on a machine with real disk (a gem host):
+
+    git clone https://github.com/gemini-rtsw/gemini-rtsw-repo.git
+    cd gemini-rtsw-repo
+    export GITHUB_TOKEN=<token with read:packages + write:packages>
+    docker login ghcr.io
+    ./sync_repo.sh          # ~50GB free, ~30 min
+
+`sync_repo.sh` rebuilds `:latest` deterministically from the scratch tags, so
+re-running it is always safe -- nothing is lost and the tags remain the source
+of truth. Then re-run the failed CI job: it will find a compacted image and take
+the fast path again.
+
+You can also compact **early, on purpose** -- run `./sync_repo.sh` on a gem host
+whenever convenient and the threshold never fires in CI.
 
 ## Common tasks
 
