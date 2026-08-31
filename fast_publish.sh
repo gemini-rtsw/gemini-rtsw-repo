@@ -92,6 +92,27 @@ MAX_ADD="${MAX_ADD:-50}"
 WORK="./fast-${PUBLISH_TAG}"
 CID=""
 
+# --- GitHub Actions surfacing ---------------------------------------------
+# Under Actions, a plain echo is buried in a 2000-line log nobody opens. These
+# two channels put a message where it is actually seen:
+#   ::warning::  -> the annotation badge on the run page ("1 warning")
+#   $GITHUB_STEP_SUMMARY -> a rendered markdown panel on the run summary
+# Both are no-ops outside CI, so standalone runs just print to the terminal.
+
+# gha_warning TITLE MESSAGE -- one-line annotation. An annotation is a single
+# line, so embedded newlines have to be sent as %0A. awk rather than the usual
+# sed ':a;N;$!ba' trick, which BSD sed (macOS) rejects.
+gha_warning() {
+    [ -n "${GITHUB_ACTIONS:-}" ] || return 0
+    printf '::warning title=%s::%s\n' "$1" \
+        "$(printf '%s' "$2" | awk '{printf "%s%s", (NR>1 ? "%0A" : ""), $0}')"
+}
+
+# gha_summary -- append markdown from stdin to the run summary panel.
+gha_summary() {
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then cat >> "$GITHUB_STEP_SUMMARY"; else cat >/dev/null; fi
+}
+
 cleanup() {
     [ -n "$CID" ] && docker rm -f "$CID" >/dev/null 2>&1
     rm -rf "$WORK"
@@ -134,8 +155,79 @@ docker pull -q "${RPM_REPO_IMAGE}:${PUBLISH_TAG}" >/dev/null 2>&1 \
     || fallback "cannot pull :${PUBLISH_TAG} (first run? then a full build is what we want)"
 
 LAYERS=$(docker inspect "${RPM_REPO_IMAGE}:${PUBLISH_TAG}" --format '{{len .RootFS.Layers}}' 2>/dev/null || echo 999)
-echo "   image has $LAYERS layer(s)"
-[ "$LAYERS" -lt "$MAX_LAYERS" ] || fallback "layer count $LAYERS >= $MAX_LAYERS -- time to compact"
+echo "   image has $LAYERS layer(s) (compaction at $MAX_LAYERS)"
+if [ "$LAYERS" -ge "$MAX_LAYERS" ]; then
+    # Loud on purpose. This fires once every ~57 publishes and lands on
+    # whichever repo happens to trip it, months from now, with nobody thinking
+    # about layer counts. The rebuild below needs ~40GB and can ENOSPC on a
+    # 72GB runner, so whoever reads this log needs to know what happened and
+    # what to do -- without having to reverse-engineer it from the script.
+    cat >&2 <<BANNER
+
+================================================================================
+ COMPACTION NEEDED -- falling back to a FULL REBUILD (sync_repo.sh)
+================================================================================
+ ${RPM_REPO_IMAGE}:${PUBLISH_TAG} has reached $LAYERS layers (limit $MAX_LAYERS).
+
+ WHY: each incremental publish adds one layer, and overlay2 stops working
+ somewhere around 128. A full rebuild flattens them back to ~43 and is also
+ the only thing that reclaims space from pruned RPMs -- an incremental publish
+ can only hide a file, never remove its bytes from the base layers.
+
+ WHAT HAPPENS NOW: sync_repo.sh rebuilds the whole image from the scratch tags.
+ That is the pre-REL-5019 path: it needs ~40GB of disk and FAILS on a 72GB
+ GitHub runner (~43GB free after cleanup). Runner size is a coin flip, so this
+ job may well die with:
+   ERROR: ... /var/lib/buildkit/.../ingest/...: no space left on device
+
+ IF IT FAILS, RUN IT BY HAND on a machine with real disk (a gem host):
+   git clone https://github.com/gemini-rtsw/gemini-rtsw-repo.git
+   cd gemini-rtsw-repo
+   export GITHUB_TOKEN=<token with read:packages+write:packages>
+   docker login ghcr.io
+   ./sync_repo.sh              # ~50GB free and ~30 min
+ It rebuilds :latest deterministically from the tag set -- nothing is lost by
+ re-running it, and the scratch tags remain the source of truth throughout.
+ Re-run the failed CI job afterwards; it will find a compacted image and take
+ the fast path again.
+
+ See "Compaction" in readme.md.
+================================================================================
+
+BANNER
+    gha_warning "rpm-repo compaction needed" \
+"${RPM_REPO_IMAGE}:${PUBLISH_TAG} reached ${LAYERS} layers (limit ${MAX_LAYERS}).
+Falling back to a full rebuild, which needs ~40GB and may fail on a 72GB runner.
+If it fails, run ./sync_repo.sh by hand on a host with ~50GB free, then re-run this job.
+See 'Compaction' in gemini-rtsw-repo/readme.md."
+    gha_summary <<SUMMARY
+## rpm-repo compaction needed
+
+\`${RPM_REPO_IMAGE}:${PUBLISH_TAG}\` has reached **${LAYERS} layers** (limit ${MAX_LAYERS}),
+so this publish fell back to a **full rebuild** instead of the incremental path.
+
+Each incremental publish adds one layer and overlay2 stops working near 128. A
+full rebuild flattens them back to ~43, and it is also the only thing that
+reclaims space from pruned RPMs -- an incremental publish can hide a file but
+never remove its bytes from the base layers.
+
+**The rebuild needs ~40GB** and a 72GB GitHub runner has ~43GB free, so this job
+may fail with \`no space left on device\`. If it did:
+
+\`\`\`sh
+git clone https://github.com/gemini-rtsw/gemini-rtsw-repo.git
+cd gemini-rtsw-repo
+export GITHUB_TOKEN=<token with read:packages+write:packages>
+docker login ghcr.io
+./sync_repo.sh          # needs ~50GB free, takes ~30 min
+\`\`\`
+
+It rebuilds \`:latest\` deterministically from the scratch tags, so re-running is
+always safe. Afterwards re-run the failed job -- it will find a compacted image
+and take the fast path again.
+SUMMARY
+    fallback "layer count $LAYERS >= $MAX_LAYERS -- compaction required"
+fi
 
 CID=$(docker run -d "${RPM_REPO_IMAGE}:${PUBLISH_TAG}") \
     || fallback "could not start a container from the image"
@@ -197,6 +289,11 @@ if [ "$EXTRA" -gt 0 ]; then
     echo "   WARNING: $EXTRA RPM(s) in the image are not backed by any scratch tag." >&2
     echo "            Run prune-pkg.sh / sync_repo.sh to reclaim them. Leaving them alone." >&2
     sed 's/^/              /' "$WORK/extra.txt" | head -10 >&2
+    gha_warning "rpm-repo has $EXTRA unbacked RPM(s)" \
+"$EXTRA RPM(s) are served by ${PUBLISH_TAG} but have no scratch tag backing them,
+so tags were pruned without a rebuild. They are harmless but still occupy layer
+bytes; a full sync_repo.sh run is what actually reclaims them.
+First few: $(head -5 "$WORK/extra.txt" | tr '\n' ' ')"
 fi
 
 # Stage ONLY the new RPMs for metadata generation. Feeding already-served RPMs

@@ -200,6 +200,22 @@ write_count_marker() {
 # build_one TAG FILTER -- build $RPM_REPO_IMAGE:TAG from the $RPM_DIR RPMs whose
 # filename contains FILTER (e.g. ".el8."). Pure from-tags: no pull of the
 # existing image to merge. Anti-truncation guard via the count marker.
+# stage_rpm SRC DEST -- put SRC into DEST/ as cheaply as the filesystem allows.
+#
+# Hardlink first: $RPM_DIR and the build dir are both under the cloned repo, so
+# a link costs an inode reference instead of a second copy of a multi-GB set.
+# Plain `cp` used to duplicate the whole ~8GB here, and both copies were live at
+# once until $RPM_DIR is freed further down -- a needless 16GB spike and several
+# minutes of I/O on every publish.
+#
+# The link is invisible downstream: the RPMs are only moved into buckets, never
+# modified in place, and the mtime freeze runs after $RPM_DIR is deleted. The
+# `|| cp` keeps this correct if the two ever land on different filesystems --
+# the same pattern the flat createrepo_c view already uses.
+stage_rpm() {
+    cp -l "$1" "$2/" 2>/dev/null || cp "$1" "$2/"
+}
+
 build_one() {
     local tag="$1" filter="$2"
     local bdir="./build-${tag}"
@@ -215,7 +231,7 @@ build_one() {
     if [ -z "$filter" ]; then
         for rpm in "$RPM_DIR"/*.rpm; do
             [ -f "$rpm" ] || continue
-            cp "$rpm" "$bdir/"; n=$((n+1))
+            stage_rpm "$rpm" "$bdir"; n=$((n+1))
         done
         echo "[$tag] $n RPM(s) (single combined repo -- all RPMs)"
     else
@@ -235,11 +251,11 @@ build_one() {
         [ -f "$rpm" ] || continue
         local bn; bn=$(basename "$rpm")
         case "$bn" in
-            *".${this_el}."*) cp "$rpm" "$bdir/"; n=$((n+1)) ;;
+            *".${this_el}."*) stage_rpm "$rpm" "$bdir"; n=$((n+1)) ;;
             *.el[0-9]*)
                 local key; key=$(printf '%s' "$bn" | sed -E "s/\.el[0-9]+\././")
-                if grep -qxF "$key" "$keyfile"; then : ; else cp "$rpm" "$bdir/"; n=$((n+1)); fi ;;
-            *) cp "$rpm" "$bdir/"; n=$((n+1)) ;;
+                if grep -qxF "$key" "$keyfile"; then : ; else stage_rpm "$rpm" "$bdir"; n=$((n+1)); fi ;;
+            *) stage_rpm "$rpm" "$bdir"; n=$((n+1)) ;;
         esac
     done
     rm -f "$keyfile"
