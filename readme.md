@@ -33,9 +33,6 @@ If you have no root shell (sudo only for `dnf`), let dnf write it instead:
 
 Note: List all the packages and specify the commit hash to install: `dnf list --showduplicates <name>`
 
-In a Dockerfile: same repo file, with `baseurl=http://rpm-repo:8080/rpm-repo/`
-(the repo container's name on the Docker network).
-
 
 ## Scripts
 
