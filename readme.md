@@ -29,7 +29,7 @@ If you have no root shell (sudo only for `dnf`), let dnf write it instead:
     sudo dnf config-manager --save --setopt='<repo-id>.gpgcheck=0'   # id from `dnf repolist`
     sudo dnf makecache
 
-**3.** `sudo dnf install PACKAGE_NAME`
+**3.** `sudo dnf install <name including git hash if needed>`
 
 Note: List all the packages and specify the commit hash to install: `dnf list --showduplicates <name>`
 
