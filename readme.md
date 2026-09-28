@@ -27,6 +27,7 @@ If you have no root shell (sudo only for `dnf`), let dnf write it instead:
 
     sudo dnf config-manager --add-repo http://localhost:8080/rpm-repo/
     sudo dnf config-manager --save --setopt='<repo-id>.gpgcheck=0'   # id from `dnf repolist`
+    sudo dnf makecache
 
 **3.** `dnf install PACKAGE_NAME`
 
