@@ -29,16 +29,13 @@ If you have no root shell (sudo only for `dnf`), let dnf write it instead:
     sudo dnf config-manager --save --setopt='<repo-id>.gpgcheck=0'   # id from `dnf repolist`
     sudo dnf makecache
 
-**3.** `dnf install PACKAGE_NAME`
+**3.** `sudo dnf install PACKAGE_NAME`
+
+Note: List all the packages and specify the commit hash to install: `dnf list --showduplicates <name>`
 
 In a Dockerfile: same repo file, with `baseurl=http://rpm-repo:8080/rpm-repo/`
 (the repo container's name on the Docker network).
 
-Local package builds (via `gemini-rtsw-ci/build_rpm.sh`) pull `:latest`
-automatically — no setup.
-
-> Ignore any `:latest-el8` / `:latest-el9` tags in GHCR — a shelved per-EL
-> split (code dormant in `sync_repo.sh`). The only served image is `:latest`.
 
 ## Scripts
 
