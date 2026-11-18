@@ -6,7 +6,7 @@
 %define git_hash %(if [ -n "$GIT_HASH" ]; then echo "$GIT_HASH"; else git rev-parse --short HEAD 2>/dev/null || echo nogit; fi)
 
 Name:      rpm-repo-mirror
-Version:   1.0.0
+Version:   1.0.1
 Release:   1.git%{git_hash}%{?dist}
 Summary:   Local mirror of the gemini-rtsw RPM repository, kept current by systemd
 License:   Proprietary
@@ -18,7 +18,7 @@ Requires:  util-linux
 
 %description
 Serves ghcr.io/gemini-rtsw/rpm-repo:latest over HTTP (default port 8081,
-path /rpm-repo/) and checks every 15 minutes for a new image. Pulls run as
+path /rpm-repo/) and checks every minute for a new image. Pulls run as
 the user in /etc/sysconfig/rpm-repo-mirror (default software), which needs
 a docker login to ghcr.io with read:packages.
 
@@ -49,5 +49,8 @@ install -Dpm 0644 deploy/%{name}.sysconfig      %{buildroot}%{_sysconfdir}/sysco
 %config(noreplace) %{_sysconfdir}/sysconfig/%{name}
 
 %changelog
+* Wed Nov 18 2026 Hawi Stecher <hawi.stecher@noirlab.edu> - 1.0.1-1
+- Update timer polls every minute (was 15 min + up to 60 s random delay).
+
 * Tue Nov 17 2026 Hawi Stecher <hawi.stecher@noirlab.edu> - 1.0.0-1
 - Initial package: mirror service and 15-minute update timer.
