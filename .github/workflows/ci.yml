@@ -1,0 +1,20 @@
+name: Build
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+jobs:
+  build:
+    uses: gemini-rtsw/gemini-rtsw-ci/.github/workflows/ci.yml@main
+    secrets: inherit
+    with:
+      scripts_dir: gemini-rtsw-ci
+      profile: lightweight
+      spec_path: rpm-repo-mirror.spec
+      el_version: '9'
+
+  publish:
+    needs: build
+    uses: gemini-rtsw/gemini-rtsw-ci/.github/workflows/publish.yml@main
+    secrets: inherit

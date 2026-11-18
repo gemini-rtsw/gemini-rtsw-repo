@@ -1,0 +1,16 @@
+# Pulls ghcr.io/gemini-rtsw/rpm-repo:latest and restarts rpm-repo-mirror.service
+# if the image changed. Started by rpm-repo-mirror-update.timer; run by hand
+# with `sudo systemctl start rpm-repo-mirror-update` to refresh now.
+
+[Unit]
+Description=Update the gemini-rtsw RPM repository mirror
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=IMAGE=ghcr.io/gemini-rtsw/rpm-repo:latest
+Environment=PULL_USER=software
+EnvironmentFile=-/etc/sysconfig/rpm-repo-mirror
+ExecStart=/usr/libexec/rpm-repo-mirror/pull --update
