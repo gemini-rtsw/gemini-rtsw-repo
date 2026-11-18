@@ -1,0 +1,13 @@
+# Settings for rpm-repo-mirror.service and rpm-repo-mirror-update.timer.
+# Kept across RPM upgrades. Restart rpm-repo-mirror after a change.
+
+# Host port the repo is served on: http://<host>:PORT/rpm-repo/
+# (mkoswgdkr-lv1 uses 8081 because bootsmith has 8080.)
+#PORT=8081
+
+# Local user whose `docker login ghcr.io` (classic PAT, read:packages) is used
+# to pull. Root needs no token of its own. Empty = pull as root, which then
+# needs its own login in /root/.docker/config.json.
+#PULL_USER=software
+
+#IMAGE=ghcr.io/gemini-rtsw/rpm-repo:latest

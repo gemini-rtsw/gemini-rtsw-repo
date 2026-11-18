@@ -1,0 +1,45 @@
+# Serves ghcr.io/gemini-rtsw/rpm-repo:latest (nginx, /rpm-repo/) on this host.
+#
+# Installed and owned by the rpm-repo-mirror RPM. Host settings go in
+# /etc/sysconfig/rpm-repo-mirror, which survives upgrades.
+#
+# Unlike app containers this follows :latest on purpose: the mirror's job is
+# to serve the newest repo. rpm-repo-mirror-update.timer pulls it and restarts
+# this unit when the image changed.
+#
+# Foreground `docker run --rm`, deliberately NOT --restart: systemd owns the
+# lifecycle. With both, `systemctl stop` leaves the container running.
+
+[Unit]
+Description=gemini-rtsw RPM repository mirror (ghcr.io/gemini-rtsw/rpm-repo)
+Documentation=https://github.com/gemini-rtsw/gemini-rtsw-repo
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+# 60 s: a host with no GHCR login retries (and logs the fix) once a minute.
+Restart=always
+RestartSec=60
+TimeoutStartSec=0
+
+Environment=IMAGE=ghcr.io/gemini-rtsw/rpm-repo:latest
+Environment=PORT=8081
+Environment=PULL_USER=software
+EnvironmentFile=-/etc/sysconfig/rpm-repo-mirror
+
+# Pull only when the image is missing (first start); routine updates are the
+# timer's job, so a registry outage never stops a working mirror. The pull runs
+# as PULL_USER because root has no GHCR login (the registry is private).
+ExecStartPre=/usr/libexec/rpm-repo-mirror/pull --if-missing
+ExecStartPre=-/usr/bin/docker rm -f rpm-repo
+
+ExecStart=/usr/bin/docker run --rm --name rpm-repo \
+  -p ${PORT}:8080 \
+  --log-opt max-size=10m --log-opt max-file=3 \
+  ${IMAGE}
+
+ExecStop=/usr/bin/docker stop -t 10 rpm-repo
+
+[Install]
+WantedBy=multi-user.target
